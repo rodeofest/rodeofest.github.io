@@ -69,9 +69,24 @@
     <button class="btn btn-primary" id="btnAddProduct">+ Add Product</button>
   </div>
   <div class="card">
+    <div class="table-filters">
+      <input type="search" id="productsFilterSearch" placeholder="Search name, HSN, details...">
+      <select id="productsFilterUnit"><option value="">All Units</option></select>
+      <select id="productsFilterGst"><option value="">All GST%</option></select>
+      <button type="button" class="filter-clear" id="productsFilterClear">Clear</button>
+    </div>
     <table>
       <thead>
-        <tr><th>Name</th><th>HSN Code</th><th>Details</th><th>Packing Qty</th><th>Unit</th><th>Rate</th><th>GST %</th><th>Actions</th></tr>
+        <tr>
+          <th class="sortable" data-sort-table="products" data-sort-key="name" data-sort-type="text">Name</th>
+          <th class="sortable" data-sort-table="products" data-sort-key="hsnCode" data-sort-type="text">HSN Code</th>
+          <th>Details</th>
+          <th class="sortable" data-sort-table="products" data-sort-key="packingQty" data-sort-type="number">Packing Qty</th>
+          <th class="sortable" data-sort-table="products" data-sort-key="unit" data-sort-type="text">Unit</th>
+          <th class="sortable" data-sort-table="products" data-sort-key="rate" data-sort-type="number">Rate</th>
+          <th class="sortable" data-sort-table="products" data-sort-key="gstPercent" data-sort-type="number">GST %</th>
+          <th>Actions</th>
+        </tr>
       </thead>
       <tbody id="productsTbody"></tbody>
     </table>
@@ -85,9 +100,26 @@
     <button class="btn btn-primary" id="btnAddCompany">+ Add Company</button>
   </div>
   <div class="card">
+    <div class="table-filters">
+      <input type="search" id="companiesFilterSearch" placeholder="Search name, address, GSTIN...">
+      <select id="companiesFilterType">
+        <option value="">All Types</option>
+        <option value="sales">Sales</option>
+        <option value="purchase">Purchase</option>
+        <option value="both">Both</option>
+      </select>
+      <button type="button" class="filter-clear" id="companiesFilterClear">Clear</button>
+    </div>
     <table>
       <thead>
-        <tr><th>Name</th><th>Address</th><th>GSTIN</th><th>Payment Terms</th><th>Type</th><th>Actions</th></tr>
+        <tr>
+          <th class="sortable" data-sort-table="companies" data-sort-key="name" data-sort-type="text">Name</th>
+          <th class="sortable" data-sort-table="companies" data-sort-key="address" data-sort-type="text">Address</th>
+          <th class="sortable" data-sort-table="companies" data-sort-key="gstin" data-sort-type="text">GSTIN</th>
+          <th class="sortable" data-sort-table="companies" data-sort-key="paymentTermsDays" data-sort-type="number">Payment Terms</th>
+          <th>Type</th>
+          <th>Actions</th>
+        </tr>
       </thead>
       <tbody id="companiesTbody"></tbody>
     </table>
@@ -102,9 +134,29 @@
     <button class="btn btn-primary" id="btnAddPurchase">+ Add Purchase</button>
   </div>
   <div class="card">
+    <div class="table-filters">
+      <input type="search" id="purchasesFilterSearch" placeholder="Search purchase no, company...">
+      <select id="purchasesFilterCompany"><option value="">All Companies</option></select>
+      <select id="purchasesFilterStatus">
+        <option value="">All Statuses</option>
+        <option value="paid">Paid</option>
+        <option value="unpaid">Unpaid</option>
+      </select>
+      <button type="button" class="filter-clear" id="purchasesFilterClear">Clear</button>
+    </div>
     <table>
       <thead>
-        <tr><th>Purchase No</th><th>Date</th><th>Purchase Company</th><th>Total</th><th>GST</th><th>Purchase Total</th><th>Payment Status</th><th>Payment Note</th><th>Actions</th></tr>
+        <tr>
+          <th class="sortable" data-sort-table="purchases" data-sort-key="purchaseNo" data-sort-type="text">Purchase No</th>
+          <th class="sortable" data-sort-table="purchases" data-sort-key="date" data-sort-type="date">Date</th>
+          <th class="sortable" data-sort-table="purchases" data-sort-key="_companyName" data-sort-type="text">Purchase Company</th>
+          <th class="sortable" data-sort-table="purchases" data-sort-key="subtotal" data-sort-type="number">Total</th>
+          <th class="sortable" data-sort-table="purchases" data-sort-key="_gst" data-sort-type="number">GST</th>
+          <th class="sortable" data-sort-table="purchases" data-sort-key="total" data-sort-type="number">Purchase Total</th>
+          <th class="sortable" data-sort-table="purchases" data-sort-key="_status" data-sort-type="text">Payment Status</th>
+          <th>Payment Note</th>
+          <th>Actions</th>
+        </tr>
       </thead>
       <tbody id="purchasesTbody"></tbody>
     </table>
@@ -120,9 +172,20 @@
     <button class="btn btn-primary" id="btnAddExpense">+ Add Expense</button>
   </div>
   <div class="card">
+    <div class="table-filters">
+      <input type="search" id="expensesFilterSearch" placeholder="Search category, description...">
+      <select id="expensesFilterCategory"><option value="">All Categories</option></select>
+      <button type="button" class="filter-clear" id="expensesFilterClear">Clear</button>
+    </div>
     <table>
       <thead>
-        <tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Actions</th></tr>
+        <tr>
+          <th class="sortable" data-sort-table="expenses" data-sort-key="date" data-sort-type="date">Date</th>
+          <th class="sortable" data-sort-table="expenses" data-sort-key="category" data-sort-type="text">Category</th>
+          <th>Description</th>
+          <th class="sortable" data-sort-table="expenses" data-sort-key="amount" data-sort-type="number">Amount</th>
+          <th>Actions</th>
+        </tr>
       </thead>
       <tbody id="expensesTbody"></tbody>
     </table>
@@ -138,7 +201,12 @@
   <div class="card">
     <table>
       <thead>
-        <tr><th>Quotation No</th><th>Date</th><th>Company</th><th>Actions</th></tr>
+        <tr>
+          <th class="sortable" data-sort-table="quotations" data-sort-key="quotationNo" data-sort-type="text">Quotation No</th>
+          <th class="sortable" data-sort-table="quotations" data-sort-key="date" data-sort-type="date">Date</th>
+          <th class="sortable" data-sort-table="quotations" data-sort-key="_companyName" data-sort-type="text">Company</th>
+          <th>Actions</th>
+        </tr>
       </thead>
       <tbody id="quotationsTbody"></tbody>
     </table>
@@ -154,7 +222,17 @@
   <div class="card">
     <table>
       <thead>
-        <tr><th>Invoice No</th><th>Challan No</th><th>Date</th><th>Company</th><th>Total</th><th>GST</th><th>Invoice Total</th><th>Payment</th><th>Actions</th></tr>
+        <tr>
+          <th class="sortable" data-sort-table="invoices" data-sort-key="invoiceNo" data-sort-type="text">Invoice No</th>
+          <th class="sortable" data-sort-table="invoices" data-sort-key="challanNo" data-sort-type="text">Challan No</th>
+          <th class="sortable" data-sort-table="invoices" data-sort-key="date" data-sort-type="date">Date</th>
+          <th class="sortable" data-sort-table="invoices" data-sort-key="_companyName" data-sort-type="text">Company</th>
+          <th class="sortable" data-sort-table="invoices" data-sort-key="subtotal" data-sort-type="number">Total</th>
+          <th class="sortable" data-sort-table="invoices" data-sort-key="_gst" data-sort-type="number">GST</th>
+          <th class="sortable" data-sort-table="invoices" data-sort-key="total" data-sort-type="number">Invoice Total</th>
+          <th class="sortable" data-sort-table="invoices" data-sort-key="_status" data-sort-type="text">Payment</th>
+          <th>Actions</th>
+        </tr>
       </thead>
       <tbody id="invoicesTbody"></tbody>
     </table>
@@ -175,7 +253,14 @@
     <h3 style="margin-top:0;">Outstanding by Company</h3>
     <table>
       <thead>
-        <tr><th>Company</th><th>Unpaid Invoices</th><th>Total</th><th>GST</th><th>Amount Owed</th><th>Expected Payment Date</th></tr>
+        <tr>
+          <th class="sortable" data-sort-table="summaryOutstanding" data-sort-key="_companyName" data-sort-type="text">Company</th>
+          <th class="sortable" data-sort-table="summaryOutstanding" data-sort-key="unpaidCount" data-sort-type="number">Unpaid Invoices</th>
+          <th class="sortable" data-sort-table="summaryOutstanding" data-sort-key="subtotalOwed" data-sort-type="number">Total</th>
+          <th class="sortable" data-sort-table="summaryOutstanding" data-sort-key="gstOwed" data-sort-type="number">GST</th>
+          <th class="sortable" data-sort-table="summaryOutstanding" data-sort-key="owed" data-sort-type="number">Amount Owed</th>
+          <th class="sortable" data-sort-table="summaryOutstanding" data-sort-key="expectedDate" data-sort-type="date">Expected Payment Date</th>
+        </tr>
       </thead>
       <tbody id="summaryOutstandingTbody"></tbody>
     </table>
@@ -191,7 +276,13 @@
     </div>
     <table>
       <thead>
-        <tr><th>Period</th><th>Sales</th><th>Received</th><th>TDS</th><th>Pending</th></tr>
+        <tr>
+          <th class="sortable" data-sort-table="summarySales" data-sort-key="key" data-sort-type="text">Period</th>
+          <th class="sortable" data-sort-table="summarySales" data-sort-key="sales" data-sort-type="number">Sales</th>
+          <th class="sortable" data-sort-table="summarySales" data-sort-key="received" data-sort-type="number">Received</th>
+          <th class="sortable" data-sort-table="summarySales" data-sort-key="tds" data-sort-type="number">TDS</th>
+          <th class="sortable" data-sort-table="summarySales" data-sort-key="pending" data-sort-type="number">Pending</th>
+        </tr>
       </thead>
       <tbody id="summarySalesTbody"></tbody>
     </table>
@@ -216,7 +307,14 @@
     </div>
     <table>
       <thead>
-        <tr><th>Period</th><th>Sales</th><th>TDS</th><th>Purchases</th><th>Expenses</th><th>Profit / Loss</th></tr>
+        <tr>
+          <th class="sortable" data-sort-table="pnl" data-sort-key="key" data-sort-type="text">Period</th>
+          <th class="sortable" data-sort-table="pnl" data-sort-key="sales" data-sort-type="number">Sales</th>
+          <th class="sortable" data-sort-table="pnl" data-sort-key="tds" data-sort-type="number">TDS</th>
+          <th class="sortable" data-sort-table="pnl" data-sort-key="purchases" data-sort-type="number">Purchases</th>
+          <th class="sortable" data-sort-table="pnl" data-sort-key="expenses" data-sort-type="number">Expenses</th>
+          <th class="sortable" data-sort-table="pnl" data-sort-key="profit" data-sort-type="number">Profit / Loss</th>
+        </tr>
       </thead>
       <tbody id="pnlTbody"></tbody>
     </table>
@@ -239,7 +337,13 @@
     </div>
     <table>
       <thead>
-        <tr><th>Period</th><th>Output GST (Collected)</th><th>Input GST (ITC)</th><th>Net GST Payable</th><th>Due Date</th></tr>
+        <tr>
+          <th class="sortable" data-sort-table="gst" data-sort-key="key" data-sort-type="text">Period</th>
+          <th class="sortable" data-sort-table="gst" data-sort-key="output" data-sort-type="number">Output GST (Collected)</th>
+          <th class="sortable" data-sort-table="gst" data-sort-key="input" data-sort-type="number">Input GST (ITC)</th>
+          <th class="sortable" data-sort-table="gst" data-sort-key="net" data-sort-type="number">Net GST Payable</th>
+          <th>Due Date</th>
+        </tr>
       </thead>
       <tbody id="gstTbody"></tbody>
     </table>
@@ -442,7 +546,7 @@
 
         <table class="line-items-table" id="quotationLineItemsTable">
           <thead>
-            <tr><th class="product-col">Product</th><th>HSN</th><th class="num-col">Qty</th><th>Unit</th><th class="num-col">Rate</th><th class="num-col">GST%</th><th></th></tr>
+            <tr><th class="product-col">Product</th><th class="num-col">Qty</th><th class="num-col">Required</th><th>Unit</th><th class="num-col">Rate</th><th class="num-col">Amount</th><th></th></tr>
           </thead>
           <tbody id="quotationLineItemsBody"></tbody>
         </table>
@@ -454,6 +558,18 @@
           <label><input type="checkbox" id="quotationShowSubtotal"> Subtotal</label>
           <label><input type="checkbox" id="quotationShowTax"> Tax (CGST/SGST/IGST)</label>
           <label><input type="checkbox" id="quotationShowGrandTotal"> Grand Total</label>
+          <label><input type="checkbox" id="quotationShowAmount"> Amount (per line)</label>
+        </div>
+
+        <div style="margin-top:18px;">
+          <label>Terms &amp; Conditions</label>
+          <table class="line-items-table" id="quotationTermsTable">
+            <thead>
+              <tr><th style="width:30px;">#</th><th>Term</th><th></th></tr>
+            </thead>
+            <tbody id="quotationTermsBody"></tbody>
+          </table>
+          <button type="button" class="btn btn-secondary" id="quotationAddTermBtn">+ Add Term</button>
         </div>
       </div>
 
@@ -496,7 +612,7 @@
             <select id="invoiceCompany" required></select>
           </div>
           <div class="form-field">
-            <label>Date</label>
+            <label>Invoice Date</label>
             <input type="date" id="invoiceDate" required>
           </div>
           <div class="form-field">
@@ -506,6 +622,18 @@
           <div class="form-field">
             <label>Challan No</label>
             <input type="text" id="invoiceChallanNo">
+          </div>
+          <div class="form-field">
+            <label>Challan Date</label>
+            <input type="date" id="invoiceChallanDate">
+          </div>
+          <div class="form-field">
+            <label>Purchase Order #</label>
+            <input type="text" id="invoicePoNumber">
+          </div>
+          <div class="form-field">
+            <label>Purchase Order Date</label>
+            <input type="date" id="invoicePoDate">
           </div>
         </div>
 
@@ -527,6 +655,13 @@
         </table>
 
         <div class="totals-box" id="invoiceTotalsBox"></div>
+
+        <div class="display-options">
+          <span class="display-options-label">Show on Invoice:</span>
+          <label><input type="checkbox" id="invoiceIncludeSeal"> Company Seal</label>
+          <label><input type="checkbox" id="invoiceIncludeSignatory"> Signatory Line (For Business Name / Authorized Signatory)</label>
+          <label><input type="checkbox" id="invoiceShowChallanDash"> Show '-' for empty Challan No / Date</label>
+        </div>
       </div>
 
       <!-- Step 2: preview -->

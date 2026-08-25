@@ -20,7 +20,7 @@ function isInterState(businessGstin, companyGstin) {
 function computeTotals(items, interState) {
   let subtotal = 0, cgst = 0, sgst = 0, igst = 0;
   const lineComputed = items.map(item => {
-    const taxable = (Number(item.qty) || 0) * (Number(item.rate) || 0);
+    const taxable = item.amount != null ? Number(item.amount) : (Number(item.qty) || 0) * (Number(item.rate) || 0);
     const taxAmount = taxable * (Number(item.gstPercent) || 0) / 100;
     let lineCgst = 0, lineSgst = 0, lineIgst = 0;
     if (interState) {

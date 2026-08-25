@@ -92,6 +92,15 @@ $$('.tabs-sub .tab-btn').forEach(btn => {
 function fmt(n) {
   return (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+function round2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+function defaultQuotationAmount(it) {
+  const required = Number(it.requiredQty) || 0;
+  const qty = Number(it.qty) || 0;
+  const rate = Number(it.rate) || 0;
+  return round2((required > 0 ? required : qty) * rate);
+}
 function fmtDateShort(iso) {
   if (!iso) return '';
   return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -118,31 +127,130 @@ function companyName(id) {
 }
 
 /* =====================================================================
+   Generic sortable table headers (click a <th data-sort-key> to sort)
+   and filter state for the Products / Company / Purchase tab tables.
+===================================================================== */
+const sortState = {};
+const SORT_RENDER_FNS = {};
+
+function sortRows(rows, tableKey) {
+  const st = sortState[tableKey];
+  if (!st) return rows;
+  const { key, dir, type } = st;
+  const sorted = rows.slice().sort((a, b) => {
+    let av = a[key], bv = b[key];
+    if (type === 'number') {
+      av = Number(av) || 0; bv = Number(bv) || 0;
+    } else if (type === 'date') {
+      av = av ? new Date(av).getTime() : 0; bv = bv ? new Date(bv).getTime() : 0;
+    } else {
+      av = (av === undefined || av === null) ? '' : String(av).toLowerCase();
+      bv = (bv === undefined || bv === null) ? '' : String(bv).toLowerCase();
+    }
+    if (av < bv) return -1;
+    if (av > bv) return 1;
+    return 0;
+  });
+  return dir === 'desc' ? sorted.reverse() : sorted;
+}
+
+function updateSortIndicators(tableKey) {
+  const st = sortState[tableKey];
+  $$(`th[data-sort-table="${tableKey}"]`).forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (st && th.getAttribute('data-sort-key') === st.key) {
+      th.classList.add(st.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+    }
+  });
+}
+
+document.addEventListener('click', (e) => {
+  const th = e.target.closest && e.target.closest('th[data-sort-key]');
+  if (!th) return;
+  const tableKey = th.getAttribute('data-sort-table');
+  const key = th.getAttribute('data-sort-key');
+  const type = th.getAttribute('data-sort-type') || 'text';
+  const current = sortState[tableKey];
+  const dir = (current && current.key === key && current.dir === 'asc') ? 'desc' : 'asc';
+  sortState[tableKey] = { key, dir, type };
+  const renderFn = SORT_RENDER_FNS[tableKey];
+  if (renderFn) renderFn();
+});
+
+const filterState = {
+  products: { search: '', unit: '', gst: '' },
+  companies: { search: '', type: '' },
+  purchases: { search: '', company: '', status: '' },
+  expenses: { search: '', category: '' },
+};
+
+/* =====================================================================
    PRODUCTS
 ===================================================================== */
+function applyProductsFilter(products) {
+  const f = filterState.products;
+  return products.filter(p => {
+    if (f.search) {
+      const hay = `${p.name} ${p.hsnCode} ${p.details || ''}`.toLowerCase();
+      if (!hay.includes(f.search.toLowerCase())) return false;
+    }
+    if (f.unit && p.unit !== f.unit) return false;
+    if (f.gst && String(p.gstPercent) !== f.gst) return false;
+    return true;
+  });
+}
+
+function populateProductsFilterOptions() {
+  const unitSel = $('#productsFilterUnit');
+  const currentUnit = unitSel.value;
+  const units = Store.getUnits().map(u => u.name);
+  unitSel.innerHTML = `<option value="">All Units</option>` + units.map(u => `<option value="${escapeHtml(u)}">${escapeHtml(u)}</option>`).join('');
+  unitSel.value = currentUnit;
+  const gstSel = $('#productsFilterGst');
+  const currentGst = gstSel.value;
+  const rates = Store.getGstRates().map(r => r.value).sort((a, b) => a - b);
+  gstSel.innerHTML = `<option value="">All GST%</option>` + rates.map(r => `<option value="${r}">${r}%</option>`).join('');
+  gstSel.value = currentGst;
+}
+
 function renderProducts() {
   const tbody = $('#productsTbody');
-  const products = Store.getProducts();
-  if (!products.length) {
+  const all = Store.getProducts();
+  const products = sortRows(applyProductsFilter(all), 'products');
+  if (!all.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="8">No products yet. Click "Add Product" to create one.</td></tr>`;
-    return;
+  } else if (!products.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">No products match your filters.</td></tr>`;
+  } else {
+    tbody.innerHTML = products.map(p => `
+      <tr>
+        <td>${escapeHtml(p.name)}</td>
+        <td>${escapeHtml(p.hsnCode)}</td>
+        <td>${escapeHtml(p.details || '')}</td>
+        <td>${p.packingQty}</td>
+        <td>${escapeHtml(p.unit)}</td>
+        <td>${fmt(p.rate)}</td>
+        <td>${p.gstPercent}%</td>
+        <td class="actions-cell">
+          <button class="btn btn-secondary btn-sm" data-edit-product="${p.id}">Edit</button>
+          <button class="btn btn-danger btn-sm" data-delete-product="${p.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
   }
-  tbody.innerHTML = products.map(p => `
-    <tr>
-      <td>${escapeHtml(p.name)}</td>
-      <td>${escapeHtml(p.hsnCode)}</td>
-      <td>${escapeHtml(p.details || '')}</td>
-      <td>${p.packingQty}</td>
-      <td>${escapeHtml(p.unit)}</td>
-      <td>${fmt(p.rate)}</td>
-      <td>${p.gstPercent}%</td>
-      <td class="actions-cell">
-        <button class="btn btn-secondary btn-sm" data-edit-product="${p.id}">Edit</button>
-        <button class="btn btn-danger btn-sm" data-delete-product="${p.id}">Delete</button>
-      </td>
-    </tr>
-  `).join('');
+  updateSortIndicators('products');
 }
+
+$('#productsFilterSearch').addEventListener('input', (e) => { filterState.products.search = e.target.value; renderProducts(); });
+$('#productsFilterUnit').addEventListener('change', (e) => { filterState.products.unit = e.target.value; renderProducts(); });
+$('#productsFilterGst').addEventListener('change', (e) => { filterState.products.gst = e.target.value; renderProducts(); });
+$('#productsFilterClear').addEventListener('click', () => {
+  filterState.products = { search: '', unit: '', gst: '' };
+  $('#productsFilterSearch').value = '';
+  $('#productsFilterUnit').value = '';
+  $('#productsFilterGst').value = '';
+  renderProducts();
+});
 
 function escapeHtml(s) {
   if (s === undefined || s === null) return '';
@@ -203,27 +311,54 @@ function companyTypeBadges(c) {
   return badges.join(' ') || '<span class="badge badge-muted">None</span>';
 }
 
+function applyCompaniesFilter(companies) {
+  const f = filterState.companies;
+  return companies.filter(c => {
+    if (f.search) {
+      const hay = `${c.name} ${c.address || ''} ${c.gstin || ''}`.toLowerCase();
+      if (!hay.includes(f.search.toLowerCase())) return false;
+    }
+    if (f.type === 'sales' && !c.isSalesCompany) return false;
+    if (f.type === 'purchase' && !c.isPurchaseCompany) return false;
+    if (f.type === 'both' && !(c.isSalesCompany && c.isPurchaseCompany)) return false;
+    return true;
+  });
+}
+
 function renderCompanies() {
   const tbody = $('#companiesTbody');
-  const companies = Store.getCompanies();
-  if (!companies.length) {
+  const all = Store.getCompanies();
+  const companies = sortRows(applyCompaniesFilter(all), 'companies');
+  if (!all.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No companies yet. Click "Add Company" to create one.</td></tr>`;
-    return;
+  } else if (!companies.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No companies match your filters.</td></tr>`;
+  } else {
+    tbody.innerHTML = companies.map(c => `
+      <tr>
+        <td>${escapeHtml(c.name)}</td>
+        <td>${escapeHtml(c.address || '')}</td>
+        <td>${escapeHtml(c.gstin || '')}</td>
+        <td>Net ${Number(c.paymentTermsDays) || 0} days</td>
+        <td>${companyTypeBadges(c)}</td>
+        <td class="actions-cell">
+          <button class="btn btn-secondary btn-sm" data-edit-company="${c.id}">Edit</button>
+          <button class="btn btn-danger btn-sm" data-delete-company="${c.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
   }
-  tbody.innerHTML = companies.map(c => `
-    <tr>
-      <td>${escapeHtml(c.name)}</td>
-      <td>${escapeHtml(c.address || '')}</td>
-      <td>${escapeHtml(c.gstin || '')}</td>
-      <td>Net ${Number(c.paymentTermsDays) || 0} days</td>
-      <td>${companyTypeBadges(c)}</td>
-      <td class="actions-cell">
-        <button class="btn btn-secondary btn-sm" data-edit-company="${c.id}">Edit</button>
-        <button class="btn btn-danger btn-sm" data-delete-company="${c.id}">Delete</button>
-      </td>
-    </tr>
-  `).join('');
+  updateSortIndicators('companies');
 }
+
+$('#companiesFilterSearch').addEventListener('input', (e) => { filterState.companies.search = e.target.value; renderCompanies(); });
+$('#companiesFilterType').addEventListener('change', (e) => { filterState.companies.type = e.target.value; renderCompanies(); });
+$('#companiesFilterClear').addEventListener('click', () => {
+  filterState.companies = { search: '', type: '' };
+  $('#companiesFilterSearch').value = '';
+  $('#companiesFilterType').value = '';
+  renderCompanies();
+});
 
 function openCompanyModal(company) {
   $('#companyModalTitle').textContent = company ? 'Edit Company' : 'Add Company';
@@ -255,6 +390,7 @@ $('#saveCompanyBtn').addEventListener('click', () => {
   closeModal('companyModal');
   renderCompanies();
   populateCompanyDropdowns();
+  populatePurchasesFilterOptions();
   toast('Company saved');
 });
 
@@ -263,7 +399,7 @@ document.addEventListener('click', (e) => {
   if (editId) openCompanyModal(Store.getCompanies().find(c => c.id === editId));
   const delId = e.target.getAttribute && e.target.getAttribute('data-delete-company');
   if (delId) {
-    if (confirm('Delete this company?')) { Store.deleteCompany(delId); renderCompanies(); populateCompanyDropdowns(); toast('Company deleted'); }
+    if (confirm('Delete this company?')) { Store.deleteCompany(delId); renderCompanies(); populateCompanyDropdowns(); populatePurchasesFilterOptions(); toast('Company deleted'); }
   }
 });
 
@@ -424,7 +560,7 @@ function companiesStoreForKind(kind) {
 function addLineItemToDraft(kind, productId) {
   const product = Store.getProducts().find(p => p.id === productId);
   if (!product) return;
-  draft[kind].items.push({
+  const item = {
     productId: product.id,
     name: product.name,
     hsnCode: product.hsnCode,
@@ -433,30 +569,38 @@ function addLineItemToDraft(kind, productId) {
     rate: product.rate,
     gstPercent: product.gstPercent,
     details: product.details || '',
-  });
+  };
+  if (kind === 'quotation') item.amount = defaultQuotationAmount(item);
+  draft[kind].items.push(item);
   renderLineItems(kind);
 }
 
 function renderLineItems(kind) {
   const tbody = $('#' + kind + 'LineItemsBody');
   const items = draft[kind].items;
+  const isQuotation = kind === 'quotation';
   if (!items.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="7">No line items added yet.</td></tr>`;
   } else {
-    tbody.innerHTML = items.map((it, idx) => `
+    tbody.innerHTML = items.map((it, idx) => {
+      if (isQuotation && it.amount == null) it.amount = defaultQuotationAmount(it);
+      return `
       <tr>
         <td>${escapeHtml(it.name)}</td>
-        <td>${escapeHtml(it.hsnCode)}</td>
+        ${isQuotation ? '' : `<td>${escapeHtml(it.hsnCode)}</td>`}
         <td class="num-col"><input type="number" min="0" step="any" value="${it.qty}" data-line-field="qty" data-line-idx="${idx}" data-line-kind="${kind}"></td>
+        ${isQuotation ? `<td class="num-col"><input type="number" min="0" step="any" value="${it.requiredQty || ''}" data-line-field="requiredQty" data-line-idx="${idx}" data-line-kind="${kind}"></td>` : ''}
         <td>${escapeHtml(it.unit)}</td>
         <td class="num-col"><input type="number" min="0" step="0.01" value="${it.rate}" data-line-field="rate" data-line-idx="${idx}" data-line-kind="${kind}"></td>
-        <td class="num-col"><select data-line-field="gstPercent" data-line-idx="${idx}" data-line-kind="${kind}" data-line-gst-select></select></td>
+        ${isQuotation
+          ? `<td class="num-col"><input type="number" min="0" step="0.01" value="${round2(it.amount)}" data-line-field="amount" data-line-idx="${idx}" data-line-kind="${kind}"></td>`
+          : `<td class="num-col"><select data-line-field="gstPercent" data-line-idx="${idx}" data-line-kind="${kind}" data-line-gst-select></select></td>`}
         <td><button type="button" class="remove-line" data-remove-line="${idx}" data-remove-kind="${kind}">&times;</button></td>
       </tr>
       <tr class="line-details-row">
         <td colspan="7"><textarea placeholder="Additional details for this line (optional)" data-line-field="details" data-line-idx="${idx}" data-line-kind="${kind}">${escapeHtml(it.details || '')}</textarea></td>
-      </tr>`
-    ).join('');
+      </tr>`;
+    }).join('');
     $$('[data-line-gst-select]', tbody).forEach(sel => {
       const idx = Number(sel.getAttribute('data-line-idx'));
       populateGstRateOptions(sel, items[idx].gstPercent);
@@ -474,7 +618,17 @@ function handleLineFieldChange(e) {
     draft[kind].items[idx].details = e.target.value;
     return;
   }
-  draft[kind].items[idx][field] = Number(e.target.value);
+  const it = draft[kind].items[idx];
+  if (kind === 'quotation' && field === 'amount') {
+    it.amount = Number(e.target.value) || 0;
+  } else {
+    it[field] = Number(e.target.value);
+    if (kind === 'quotation' && (field === 'qty' || field === 'rate' || field === 'requiredQty')) {
+      it.amount = defaultQuotationAmount(it);
+      const amountInput = $(`[data-line-field="amount"][data-line-idx="${idx}"][data-line-kind="${kind}"]`);
+      if (amountInput) amountInput.value = it.amount;
+    }
+  }
   renderTotalsBox(kind);
 }
 document.addEventListener('input', handleLineFieldChange);
@@ -523,16 +677,18 @@ function renderTotalsBox(kind) {
 ===================================================================== */
 function renderQuotations() {
   const tbody = $('#quotationsTbody');
-  const quotations = Store.getQuotations().slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  let quotations = Store.getQuotations().map(q => Object.assign({}, q, { _companyName: companyName(q.companyId) }));
+  quotations = sortState.quotations ? sortRows(quotations, 'quotations') : quotations.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   if (!quotations.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="4">No quotations yet.</td></tr>`;
+    updateSortIndicators('quotations');
     return;
   }
   tbody.innerHTML = quotations.map(q => `
     <tr>
       <td>${escapeHtml(q.quotationNo)}</td>
       <td>${fmtDateShort(q.date)}</td>
-      <td>${escapeHtml(companyName(q.companyId))}</td>
+      <td>${escapeHtml(q._companyName)}</td>
       <td class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-quotation="${q.id}">Edit</button>
         <button class="btn btn-secondary btn-sm" data-pdf-quotation="${q.id}">Download PDF</button>
@@ -540,38 +696,77 @@ function renderQuotations() {
       </td>
     </tr>
   `).join('');
+  updateSortIndicators('quotations');
 }
 
 function resetQuotationModal() {
-  draft.quotation = { items: [] };
+  draft.quotation = { items: [], terms: Store.getTermsTemplates().map(t => t.text) };
   $('#quotationId').value = '';
   $('#quotationDate').value = todayISO();
   $('#quotationCompany').value = '';
   $('#quotationShowSubtotal').checked = false;
   $('#quotationShowTax').checked = false;
   $('#quotationShowGrandTotal').checked = false;
+  $('#quotationShowAmount').checked = false;
   populateProductPicker($('#quotationProductPicker'));
   renderLineItems('quotation');
+  renderQuotationTerms();
   showQuotationStep('form');
 }
+
+function renderQuotationTerms() {
+  const tbody = $('#quotationTermsBody');
+  const terms = draft.quotation.terms || [];
+  if (!terms.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">No terms added.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = terms.map((t, idx) => `
+    <tr>
+      <td>${idx + 1}</td>
+      <td><textarea data-term-field data-term-idx="${idx}">${escapeHtml(t)}</textarea></td>
+      <td><button type="button" class="remove-line" data-remove-term="${idx}">&times;</button></td>
+    </tr>
+  `).join('');
+}
+
+document.addEventListener('input', (e) => {
+  if (!e.target.hasAttribute('data-term-field')) return;
+  const idx = Number(e.target.getAttribute('data-term-idx'));
+  draft.quotation.terms[idx] = e.target.value;
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.hasAttribute('data-remove-term')) return;
+  const idx = Number(e.target.getAttribute('data-remove-term'));
+  draft.quotation.terms.splice(idx, 1);
+  renderQuotationTerms();
+});
+
+$('#quotationAddTermBtn').addEventListener('click', () => {
+  draft.quotation.terms = draft.quotation.terms || [];
+  draft.quotation.terms.push('');
+  renderQuotationTerms();
+  const textareas = $$('#quotationTermsBody textarea');
+  if (textareas.length) textareas[textareas.length - 1].focus();
+});
 
 function getQuotationDisplayOptions() {
   return {
     showSubtotal: $('#quotationShowSubtotal').checked,
     showTax: $('#quotationShowTax').checked,
     showGrandTotal: $('#quotationShowGrandTotal').checked,
+    showAmount: $('#quotationShowAmount').checked,
   };
 }
 
 function getQuotationTerms() {
-  const existingId = $('#quotationId').value;
-  if (existingId) {
-    // Editing an already-saved quotation: keep whatever terms were snapshotted at creation time —
-    // never re-pull current config, so later Terms & Conditions edits don't retroactively change it.
-    const existing = Store.getQuotations().find(q => q.id === existingId);
-    return (existing && existing.terms) ? existing.terms : (draft.quotation.terms || []);
-  }
-  return Store.getTermsTemplates().map(t => t.text);
+  // Terms are now edited directly in the form (see #quotationTermsBody) and live in
+  // draft.quotation.terms: seeded once from the current config templates for a brand-new
+  // quotation (resetQuotationModal) or from the quotation's own stored terms when editing
+  // (data-edit-quotation handler) — either way, edits made here only affect this quotation,
+  // never the config templates themselves.
+  return draft.quotation.terms || [];
 }
 
 function getQuotationNoForDraft() {
@@ -630,17 +825,33 @@ function buildDocDataFromDraft(kind, extra) {
 function renderDocPreview(container, docData, company, docTitle, isInvoice) {
   const profile = Store.getProfile();
   const interState = isInterState(profile.gstin, company ? company.gstin : '');
-  const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true }, docData.displayOptions || {});
+  const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true, showAmount: false }, docData.displayOptions || {});
+  const showRequired = !isInvoice && docData.items.some(it => Number(it.requiredQty) > 0);
+
   const rowsHtml = docData.items.map((it, idx) => {
     const taxable = it.qty * it.rate;
     const tax = taxable * it.gstPercent / 100;
     const detailsHtml = it.details ? `<div class="line-details">${escapeHtml(it.details)}</div>` : '';
+    if (isInvoice) {
+      return `<tr>
+        <td>${idx + 1}</td><td class="product-col">${escapeHtml(it.name)}${detailsHtml}</td><td>${escapeHtml(it.hsnCode)}</td>
+        <td>${it.qty}</td><td>${escapeHtml(it.unit)}</td><td>${fmt(it.rate)}</td>
+        <td>${it.gstPercent}%</td><td>${fmt(tax)}</td><td>${fmt(taxable + tax)}</td>
+      </tr>`;
+    }
+    const quotationAmount = it.amount != null ? Number(it.amount) : defaultQuotationAmount(it);
     return `<tr>
-      <td>${idx + 1}</td><td class="product-col">${escapeHtml(it.name)}${detailsHtml}</td><td>${escapeHtml(it.hsnCode)}</td>
-      <td>${it.qty} ${escapeHtml(it.unit)}</td><td>${fmt(it.rate)}</td>
-      <td>${it.gstPercent}%</td><td>${fmt(tax)}</td><td>${fmt(taxable + tax)}</td>
+      <td>${idx + 1}</td><td class="product-col">${escapeHtml(it.name)}${detailsHtml}</td>
+      <td>${it.qty} ${escapeHtml(it.unit)}</td>
+      ${showRequired ? `<td>${Number(it.requiredQty) > 0 ? it.requiredQty : '-'}</td>` : ''}
+      <td>${fmt(it.rate)} per ${escapeHtml(it.unit || 'unit')}</td>
+      ${opts.showAmount ? `<td>${fmt(quotationAmount)}</td>` : ''}
     </tr>`;
   }).join('');
+
+  const theadHtml = isInvoice
+    ? `<tr><th>#</th><th class="product-col">Product</th><th>HSN</th><th>Qty</th><th>Per</th><th>Rate</th><th>GST%</th><th>Tax</th><th>Amount</th></tr>`
+    : `<tr><th>#</th><th class="product-col">Product</th><th>Qty</th>${showRequired ? '<th>Required</th>' : ''}<th>Rate</th>${opts.showAmount ? '<th>Amount</th>' : ''}</tr>`;
 
   const taxRowsHtml = !opts.showTax ? '' : (interState
     ? `<div class="row"><span>IGST</span><span>${fmt(docData.igst)}</span></div>`
@@ -648,6 +859,15 @@ function renderDocPreview(container, docData, company, docTitle, isInvoice) {
 
   let bankHtml = '';
   if (isInvoice) {
+    const includeSeal = docData.includeSeal !== false;
+    const includeSignatory = docData.includeSignatory !== false;
+    const sealBoxHtml = includeSeal ? `<div class="seal-box">${profile.sealDataUrl ? `<img src="${profile.sealDataUrl}">` : 'Company Seal'}</div>` : '';
+    const signatoryHtml = includeSignatory ? `
+      <div class="seal-wrap">
+        <div class="seal-caption">For ${escapeHtml(profile.name || 'Business Name')}</div>
+        ${sealBoxHtml}
+        <div class="seal-caption">Authorized Signatory</div>
+      </div>` : sealBoxHtml;
     bankHtml = `
       <div class="doc-footer-block">
         <div>
@@ -657,9 +877,21 @@ function renderDocPreview(container, docData, company, docTitle, isInvoice) {
           <div>IFSC: ${escapeHtml(profile.bankIFSC || '-')}</div>
           <div>Branch: ${escapeHtml(profile.bankBranch || '-')}</div>
         </div>
-        <div class="seal-box">${profile.sealDataUrl ? `<img src="${profile.sealDataUrl}">` : 'Company Seal'}</div>
+        ${signatoryHtml}
       </div>`;
   }
+
+  const headRightHtml = isInvoice ? `
+    <div class="doc-title">${docTitle}</div>
+    <div>Invoice No: ${escapeHtml(docData.invoiceNo || '(will be assigned)')}</div>
+    <div>Invoice Date: ${fmtDateShort(docData.date)}</div>
+    <div>Challan No: ${escapeHtml(docData.challanNo || (docData.showChallanDash ? '-' : ''))}</div>
+    <div>Challan Date: ${docData.challanDate ? fmtDateShort(docData.challanDate) : (docData.showChallanDash ? '-' : '')}</div>
+  ` : `
+    <div class="doc-title">${docTitle}</div>
+    <div>Quote No: ${escapeHtml(docData.quotationNo || '(will be assigned)')}</div>
+    <div>Quote Date: ${fmtDateShort(docData.date)}</div>
+  `;
 
   container.innerHTML = `
     <div class="doc-head">
@@ -671,21 +903,21 @@ function renderDocPreview(container, docData, company, docTitle, isInvoice) {
           ${profile.gstin ? `<div>GSTIN: ${escapeHtml(profile.gstin)}</div>` : ''}
         </div>
       </div>
-      <div class="doc-head-right">
-        <div class="doc-title">${docTitle}</div>
-        <div>No: ${escapeHtml(docData.quotationNo || docData.invoiceNo || '(will be assigned)')}</div>
-        ${isInvoice ? `<div>Challan: ${escapeHtml(docData.challanNo || '-')}</div>` : ''}
-        <div>Date: ${fmtDateShort(docData.date)}</div>
-      </div>
+      <div class="doc-head-right">${headRightHtml}</div>
     </div>
     <div class="bill-to">
-      <h4>Bill To</h4>
+      <h4>${isInvoice ? 'Bill To' : 'To'}</h4>
       <div>${escapeHtml(company ? company.name : '')}</div>
       <div>${escapeHtml(company ? company.address || '' : '')}</div>
       ${company && company.gstin ? `<div>GSTIN: ${escapeHtml(company.gstin)}</div>` : ''}
     </div>
+    ${isInvoice ? `
+    <div class="po-block">
+      <div>PO No: ${escapeHtml(docData.poNumber || '')}</div>
+      <div>PO Date: ${docData.poDate ? fmtDateShort(docData.poDate) : ''}</div>
+    </div>` : ''}
     <table>
-      <thead><tr><th>#</th><th class="product-col">Product</th><th>HSN</th><th>Qty</th><th>Rate</th><th>GST%</th><th>Tax</th><th>Total</th></tr></thead>
+      <thead>${theadHtml}</thead>
       <tbody>${rowsHtml}</tbody>
     </table>
     <div class="totals-box">
@@ -749,11 +981,13 @@ document.addEventListener('click', (e) => {
     $('#quotationDate').value = q.date;
     populateProductPicker($('#quotationProductPicker'));
     $('#quotationCompany').value = q.companyId;
-    const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true }, q.displayOptions || {});
+    const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true, showAmount: false }, q.displayOptions || {});
     $('#quotationShowSubtotal').checked = opts.showSubtotal;
     $('#quotationShowTax').checked = opts.showTax;
     $('#quotationShowGrandTotal').checked = opts.showGrandTotal;
+    $('#quotationShowAmount').checked = opts.showAmount;
     renderLineItems('quotation');
+    renderQuotationTerms();
     showQuotationStep('form');
     openModal('quotationModal');
   }
@@ -786,9 +1020,15 @@ function paymentStatusBadge(inv) {
 
 function renderInvoices() {
   const tbody = $('#invoicesTbody');
-  const invoices = Store.getInvoices().slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  let invoices = Store.getInvoices().map(inv => Object.assign({}, inv, {
+    _companyName: companyName(inv.companyId),
+    _gst: (Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0),
+    _status: paymentStatusText(inv),
+  }));
+  invoices = sortState.invoices ? sortRows(invoices, 'invoices') : invoices.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   if (!invoices.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="9">No invoices yet.</td></tr>`;
+    updateSortIndicators('invoices');
     return;
   }
   tbody.innerHTML = invoices.map(inv => `
@@ -796,9 +1036,9 @@ function renderInvoices() {
       <td>${escapeHtml(inv.invoiceNo)}</td>
       <td>${escapeHtml(inv.challanNo || '-')}</td>
       <td>${fmtDateShort(inv.date)}</td>
-      <td>${escapeHtml(companyName(inv.companyId))}</td>
+      <td>${escapeHtml(inv._companyName)}</td>
       <td>${fmt(inv.subtotal)}</td>
-      <td>${fmt((Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0))}</td>
+      <td>${fmt(inv._gst)}</td>
       <td>${fmt(inv.total)}</td>
       <td>${paymentStatusBadge(inv)}</td>
       <td class="actions-cell">
@@ -808,6 +1048,7 @@ function renderInvoices() {
       </td>
     </tr>
   `).join('');
+  updateSortIndicators('invoices');
 }
 
 function resetInvoiceModal() {
@@ -817,6 +1058,12 @@ function resetInvoiceModal() {
   $('#invoiceCompany').value = '';
   $('#invoiceNo').value = getNextInvoiceNo();
   $('#invoiceChallanNo').value = getNextChallanNo();
+  $('#invoiceChallanDate').value = todayISO();
+  $('#invoicePoNumber').value = '';
+  $('#invoicePoDate').value = '';
+  $('#invoiceIncludeSeal').checked = true;
+  $('#invoiceIncludeSignatory').checked = true;
+  $('#invoiceShowChallanDash').checked = false;
   populateProductPicker($('#invoiceProductPicker'));
   renderLineItems('invoice');
   showInvoiceStep('form');
@@ -853,6 +1100,12 @@ function getInvoiceDraftDoc() {
   return buildDocDataFromDraft('invoice', {
     invoiceNo: $('#invoiceNo').value.trim(),
     challanNo: $('#invoiceChallanNo').value.trim(),
+    challanDate: $('#invoiceChallanDate').value,
+    poNumber: $('#invoicePoNumber').value.trim(),
+    poDate: $('#invoicePoDate').value,
+    includeSeal: $('#invoiceIncludeSeal').checked,
+    includeSignatory: $('#invoiceIncludeSignatory').checked,
+    showChallanDash: $('#invoiceShowChallanDash').checked,
   });
 }
 
@@ -901,6 +1154,12 @@ document.addEventListener('click', (e) => {
     $('#invoiceDate').value = inv.date;
     $('#invoiceNo').value = inv.invoiceNo;
     $('#invoiceChallanNo').value = inv.challanNo || '';
+    $('#invoiceChallanDate').value = inv.challanDate || '';
+    $('#invoicePoNumber').value = inv.poNumber || '';
+    $('#invoicePoDate').value = inv.poDate || '';
+    $('#invoiceIncludeSeal').checked = inv.includeSeal !== false;
+    $('#invoiceIncludeSignatory').checked = inv.includeSignatory !== false;
+    $('#invoiceShowChallanDash').checked = !!inv.showChallanDash;
     populateProductPicker($('#invoiceProductPicker'));
     $('#invoiceCompany').value = inv.companyId;
     renderLineItems('invoice');
@@ -927,30 +1186,73 @@ function purchasePaymentBadge(p) {
   return p.paymentDone ? '<span class="badge badge-success">Paid</span>' : '<span class="badge badge-muted">Unpaid</span>';
 }
 
+function applyPurchasesFilter(purchases) {
+  const f = filterState.purchases;
+  return purchases.filter(p => {
+    if (f.search) {
+      const hay = `${p.purchaseNo} ${p._companyName} ${p.paymentNote || ''}`.toLowerCase();
+      if (!hay.includes(f.search.toLowerCase())) return false;
+    }
+    if (f.company && p.companyId !== f.company) return false;
+    if (f.status === 'paid' && !p.paymentDone) return false;
+    if (f.status === 'unpaid' && p.paymentDone) return false;
+    return true;
+  });
+}
+
+function populatePurchasesFilterOptions() {
+  const sel = $('#purchasesFilterCompany');
+  const current = sel.value;
+  const companies = Store.getCompanies().filter(c => c.isPurchaseCompany).slice().sort((a, b) => a.name.localeCompare(b.name));
+  sel.innerHTML = `<option value="">All Companies</option>` + companies.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  sel.value = current;
+}
+
 function renderPurchases() {
   const tbody = $('#purchasesTbody');
-  const purchases = Store.getPurchases().slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  if (!purchases.length) {
+  const all = Store.getPurchases();
+  let purchases = all.map(p => Object.assign({}, p, {
+    _companyName: companyName(p.companyId),
+    _gst: (Number(p.cgst) || 0) + (Number(p.sgst) || 0) + (Number(p.igst) || 0),
+    _status: p.paymentDone ? 'Paid' : 'Unpaid',
+  }));
+  purchases = applyPurchasesFilter(purchases);
+  purchases = sortState.purchases ? sortRows(purchases, 'purchases') : purchases.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  if (!all.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="9">No purchases yet.</td></tr>`;
-    return;
+  } else if (!purchases.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">No purchases match your filters.</td></tr>`;
+  } else {
+    tbody.innerHTML = purchases.map(p => `
+      <tr>
+        <td>${escapeHtml(p.purchaseNo)}</td>
+        <td>${fmtDateShort(p.date)}</td>
+        <td>${escapeHtml(p._companyName)}</td>
+        <td>${fmt(p.subtotal)}</td>
+        <td>${fmt(p._gst)}</td>
+        <td>${fmt(p.total)}</td>
+        <td>${purchasePaymentBadge(p)}</td>
+        <td class="truncate-cell" title="${escapeHtml(p.paymentNote || '')}">${escapeHtml(p.paymentNote || '-')}</td>
+        <td class="actions-cell">
+          <button class="btn btn-secondary btn-sm" data-edit-purchase="${p.id}">Edit</button>
+          <button class="btn btn-danger btn-sm" data-delete-purchase="${p.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
   }
-  tbody.innerHTML = purchases.map(p => `
-    <tr>
-      <td>${escapeHtml(p.purchaseNo)}</td>
-      <td>${fmtDateShort(p.date)}</td>
-      <td>${escapeHtml(companyName(p.companyId))}</td>
-      <td>${fmt(p.subtotal)}</td>
-      <td>${fmt((Number(p.cgst) || 0) + (Number(p.sgst) || 0) + (Number(p.igst) || 0))}</td>
-      <td>${fmt(p.total)}</td>
-      <td>${purchasePaymentBadge(p)}</td>
-      <td class="truncate-cell" title="${escapeHtml(p.paymentNote || '')}">${escapeHtml(p.paymentNote || '-')}</td>
-      <td class="actions-cell">
-        <button class="btn btn-secondary btn-sm" data-edit-purchase="${p.id}">Edit</button>
-        <button class="btn btn-danger btn-sm" data-delete-purchase="${p.id}">Delete</button>
-      </td>
-    </tr>
-  `).join('');
+  updateSortIndicators('purchases');
 }
+
+$('#purchasesFilterSearch').addEventListener('input', (e) => { filterState.purchases.search = e.target.value; renderPurchases(); });
+$('#purchasesFilterCompany').addEventListener('change', (e) => { filterState.purchases.company = e.target.value; renderPurchases(); });
+$('#purchasesFilterStatus').addEventListener('change', (e) => { filterState.purchases.status = e.target.value; renderPurchases(); });
+$('#purchasesFilterClear').addEventListener('click', () => {
+  filterState.purchases = { search: '', company: '', status: '' };
+  $('#purchasesFilterSearch').value = '';
+  $('#purchasesFilterCompany').value = '';
+  $('#purchasesFilterStatus').value = '';
+  renderPurchases();
+});
 
 let expandedPurchaseCompanies = new Set();
 
@@ -974,10 +1276,14 @@ function renderPurchasesByCompany() {
     return;
   }
   const companies = Store.getCompanies().filter(c => c.isPurchaseCompany);
-  const groups = companies.map(c => ({
-    company: c,
-    purchases: purchases.filter(p => p.companyId === c.id).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
-  })).filter(g => g.purchases.length > 0);
+  const groups = companies.map(c => {
+    let list = purchases.filter(p => p.companyId === c.id).map(p => Object.assign({}, p, {
+      _gst: (Number(p.cgst) || 0) + (Number(p.sgst) || 0) + (Number(p.igst) || 0),
+      _status: p.paymentDone ? 'Paid' : 'Unpaid',
+    }));
+    list = sortState.purchasesByCompany ? sortRows(list, 'purchasesByCompany') : list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    return { company: c, purchases: list };
+  }).filter(g => g.purchases.length > 0);
 
   container.innerHTML = groups.map(g => {
     const total = g.purchases.reduce((sum, p) => sum + (Number(p.total) || 0), 0);
@@ -993,13 +1299,21 @@ function renderPurchasesByCompany() {
       <div class="accordion-body" style="display:${expanded ? '' : 'none'};">
         <table>
           <thead>
-            <tr><th>Purchase No</th><th>Date</th><th>Total</th><th>GST</th><th>Purchase Total</th><th>Payment Status</th></tr>
+            <tr>
+              <th class="sortable" data-sort-table="purchasesByCompany" data-sort-key="purchaseNo" data-sort-type="text">Purchase No</th>
+              <th class="sortable" data-sort-table="purchasesByCompany" data-sort-key="date" data-sort-type="date">Date</th>
+              <th class="sortable" data-sort-table="purchasesByCompany" data-sort-key="subtotal" data-sort-type="number">Total</th>
+              <th class="sortable" data-sort-table="purchasesByCompany" data-sort-key="_gst" data-sort-type="number">GST</th>
+              <th class="sortable" data-sort-table="purchasesByCompany" data-sort-key="total" data-sort-type="number">Purchase Total</th>
+              <th class="sortable" data-sort-table="purchasesByCompany" data-sort-key="_status" data-sort-type="text">Payment Status</th>
+            </tr>
           </thead>
           <tbody>${g.purchases.map(purchaseRow).join('')}</tbody>
         </table>
       </div>
     </div>`;
   }).join('');
+  updateSortIndicators('purchasesByCompany');
 }
 
 document.addEventListener('click', (e) => {
@@ -1082,26 +1396,60 @@ document.addEventListener('click', (e) => {
 /* =====================================================================
    CASH / MANUAL EXPENSES
 ===================================================================== */
+function applyExpensesFilter(expenses) {
+  const f = filterState.expenses;
+  return expenses.filter(e => {
+    if (f.search) {
+      const hay = `${e.category} ${e.description || ''}`.toLowerCase();
+      if (!hay.includes(f.search.toLowerCase())) return false;
+    }
+    if (f.category && e.category !== f.category) return false;
+    return true;
+  });
+}
+
+function populateExpensesFilterOptions() {
+  const sel = $('#expensesFilterCategory');
+  const current = sel.value;
+  const categories = Store.getExpenseCategories().map(c => c.name);
+  sel.innerHTML = `<option value="">All Categories</option>` + categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  sel.value = current;
+}
+
 function renderExpenses() {
   const tbody = $('#expensesTbody');
-  const expenses = Store.getExpenses().slice().sort((a, b) => new Date(b.date) - new Date(a.date));
-  if (!expenses.length) {
+  const all = Store.getExpenses();
+  let expenses = applyExpensesFilter(all);
+  expenses = sortState.expenses ? sortRows(expenses, 'expenses') : expenses.sort((a, b) => new Date(b.date) - new Date(a.date));
+  if (!all.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="5">No expenses recorded yet.</td></tr>`;
-    return;
+  } else if (!expenses.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">No expenses match your filters.</td></tr>`;
+  } else {
+    tbody.innerHTML = expenses.map(e => `
+      <tr>
+        <td>${fmtDateShort(e.date)}</td>
+        <td>${escapeHtml(e.category)}</td>
+        <td>${escapeHtml(e.description || '')}</td>
+        <td>${fmt(e.amount)}</td>
+        <td class="actions-cell">
+          <button class="btn btn-secondary btn-sm" data-edit-expense="${e.id}">Edit</button>
+          <button class="btn btn-danger btn-sm" data-delete-expense="${e.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
   }
-  tbody.innerHTML = expenses.map(e => `
-    <tr>
-      <td>${fmtDateShort(e.date)}</td>
-      <td>${escapeHtml(e.category)}</td>
-      <td>${escapeHtml(e.description || '')}</td>
-      <td>${fmt(e.amount)}</td>
-      <td class="actions-cell">
-        <button class="btn btn-secondary btn-sm" data-edit-expense="${e.id}">Edit</button>
-        <button class="btn btn-danger btn-sm" data-delete-expense="${e.id}">Delete</button>
-      </td>
-    </tr>
-  `).join('');
+  updateSortIndicators('expenses');
 }
+
+$('#expensesFilterSearch').addEventListener('input', (e) => { filterState.expenses.search = e.target.value; renderExpenses(); });
+$('#expensesFilterCategory').addEventListener('change', (e) => { filterState.expenses.category = e.target.value; renderExpenses(); });
+$('#expensesFilterClear').addEventListener('click', () => {
+  filterState.expenses = { search: '', category: '' };
+  $('#expensesFilterSearch').value = '';
+  $('#expensesFilterCategory').value = '';
+  renderExpenses();
+});
 
 function openExpenseModal(expense) {
   $('#expenseModalTitle').textContent = expense ? 'Edit Expense' : 'Add Expense';
@@ -1211,9 +1559,9 @@ function openConfigModal(type, id) {
 }
 
 function refreshConfigConsumers(type) {
-  if (type === 'unit') populateUnitOptions();
-  if (type === 'gstRate') populateGstRateOptions($('#productGst'));
-  if (type === 'expenseCategory') populateExpenseCategoryOptions();
+  if (type === 'unit') { populateUnitOptions(); populateProductsFilterOptions(); }
+  if (type === 'gstRate') { populateGstRateOptions($('#productGst')); populateProductsFilterOptions(); }
+  if (type === 'expenseCategory') { populateExpenseCategoryOptions(); populateExpensesFilterOptions(); }
 }
 
 $('#saveConfigItemBtn').addEventListener('click', () => {
@@ -1308,10 +1656,21 @@ function renderPayments() {
     return;
   }
   const companies = Store.getCompanies();
-  const groups = companies.map(c => ({
-    company: c,
-    invoices: invoices.filter(i => i.companyId === c.id).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
-  })).filter(g => g.invoices.length > 0);
+  const groups = companies.map(c => {
+    let list = invoices.filter(i => i.companyId === c.id).map(inv => {
+      const pay = inv.payment || {};
+      return Object.assign({}, inv, {
+        _gst: (Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0),
+        _amountReceived: pay.received ? (Number(pay.amountReceived) || 0) : 0,
+        _pending: pay.received && pay.shortfallType === 'pending' ? (Number(pay.shortfallAmount) || 0) : 0,
+        _tds: pay.received && pay.shortfallType === 'tds' ? (Number(pay.shortfallAmount) || 0) : 0,
+        _paymentDate: pay.received ? pay.paymentDate : '',
+        _status: paymentStatusText(inv),
+      });
+    });
+    list = sortState.payments ? sortRows(list, 'payments') : list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    return { company: c, invoices: list };
+  }).filter(g => g.invoices.length > 0);
 
   container.innerHTML = groups.map(g => {
     const outstanding = g.invoices.reduce((sum, inv) => sum + Math.max(invoiceBalance(inv), 0), 0);
@@ -1327,13 +1686,26 @@ function renderPayments() {
       <div class="accordion-body" style="display:${expanded ? '' : 'none'};">
         <table>
           <thead>
-            <tr><th>Invoice No</th><th>Total</th><th>GST</th><th>Invoice Total</th><th>Amount Received</th><th>Pending</th><th>TDS</th><th>Payment Date</th><th>Expected Payment</th><th>Status</th><th>Actions</th></tr>
+            <tr>
+              <th class="sortable" data-sort-table="payments" data-sort-key="invoiceNo" data-sort-type="text">Invoice No</th>
+              <th class="sortable" data-sort-table="payments" data-sort-key="subtotal" data-sort-type="number">Total</th>
+              <th class="sortable" data-sort-table="payments" data-sort-key="_gst" data-sort-type="number">GST</th>
+              <th class="sortable" data-sort-table="payments" data-sort-key="total" data-sort-type="number">Invoice Total</th>
+              <th class="sortable" data-sort-table="payments" data-sort-key="_amountReceived" data-sort-type="number">Amount Received</th>
+              <th class="sortable" data-sort-table="payments" data-sort-key="_pending" data-sort-type="number">Pending</th>
+              <th class="sortable" data-sort-table="payments" data-sort-key="_tds" data-sort-type="number">TDS</th>
+              <th class="sortable" data-sort-table="payments" data-sort-key="_paymentDate" data-sort-type="date">Payment Date</th>
+              <th>Expected Payment</th>
+              <th class="sortable" data-sort-table="payments" data-sort-key="_status" data-sort-type="text">Status</th>
+              <th>Actions</th>
+            </tr>
           </thead>
           <tbody>${g.invoices.map(paymentInvoiceRow).join('')}</tbody>
         </table>
       </div>
     </div>`;
   }).join('');
+  updateSortIndicators('payments');
 }
 
 document.addEventListener('click', (e) => {
@@ -1429,9 +1801,11 @@ function computeCompanyOutstanding() {
 
 function renderSummaryOutstanding() {
   const tbody = $('#summaryOutstandingTbody');
-  const rows = computeCompanyOutstanding();
+  let rows = computeCompanyOutstanding().map(r => Object.assign({}, r, { _companyName: r.company.name }));
+  rows = sortState.summaryOutstanding ? sortRows(rows, 'summaryOutstanding') : rows;
   if (!rows.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No invoices yet.</td></tr>`;
+    updateSortIndicators('summaryOutstanding');
     return;
   }
   tbody.innerHTML = rows.map(r => `
@@ -1444,6 +1818,7 @@ function renderSummaryOutstanding() {
       <td>${r.expectedDate ? fmtDateShort(r.expectedDate) : '-'}</td>
     </tr>
   `).join('');
+  updateSortIndicators('summaryOutstanding');
 }
 
 let summaryPeriodMode = 'annual';
@@ -1462,6 +1837,7 @@ function computeSalesByPeriod(mode) {
   return Array.from(map.entries())
     .sort((a, b) => (a[0] < b[0] ? -1 : 1))
     .map(([key, v]) => ({
+      key,
       period: mode === 'annual' ? `FY ${key}` : formatMonthLabel(key),
       sales: v.sales,
       received: v.received,
@@ -1477,9 +1853,11 @@ function formatMonthLabel(ym) {
 
 function renderSummarySales() {
   const tbody = $('#summarySalesTbody');
-  const rows = computeSalesByPeriod(summaryPeriodMode);
+  let rows = computeSalesByPeriod(summaryPeriodMode);
+  rows = sortState.summarySales ? sortRows(rows, 'summarySales') : rows;
   if (!rows.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="5">No invoices yet.</td></tr>`;
+    updateSortIndicators('summarySales');
     return;
   }
   tbody.innerHTML = rows.map(r => `
@@ -1491,6 +1869,7 @@ function renderSummarySales() {
       <td>${fmt(r.pending)}</td>
     </tr>
   `).join('');
+  updateSortIndicators('summarySales');
 }
 
 $('#summaryAnnualBtn').addEventListener('click', () => {
@@ -1531,6 +1910,7 @@ function computeProfitLossByPeriod(mode) {
   return Array.from(map.entries())
     .sort((a, b) => (a[0] < b[0] ? -1 : 1))
     .map(([key, v]) => ({
+      key,
       period: mode === 'annual' ? `FY ${key}` : formatMonthLabel(key),
       ...v,
       profit: v.sales - v.purchases - v.expenses,
@@ -1558,11 +1938,13 @@ function renderProfitLoss() {
   `;
 
   const tbody = $('#pnlTbody');
-  if (!rows.length) {
+  const sortedRows = sortState.pnl ? sortRows(rows, 'pnl') : rows;
+  if (!sortedRows.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No sales, purchases, or expenses recorded yet.</td></tr>`;
+    updateSortIndicators('pnl');
     return;
   }
-  tbody.innerHTML = rows.map(r => `
+  tbody.innerHTML = sortedRows.map(r => `
     <tr>
       <td>${escapeHtml(r.period)}</td>
       <td>${fmt(r.sales)}</td>
@@ -1572,6 +1954,7 @@ function renderProfitLoss() {
       <td>${fmt(r.profit)}</td>
     </tr>
   `).join('');
+  updateSortIndicators('pnl');
 }
 
 $('#pnlAnnualBtn').addEventListener('click', () => {
@@ -1608,6 +1991,7 @@ function computeGSTByPeriod(mode) {
   return Array.from(map.entries())
     .sort((a, b) => (a[0] < b[0] ? -1 : 1))
     .map(([key, v]) => ({
+      key,
       period: mode === 'annual' ? `FY ${key}` : formatMonthLabel(key),
       output: v.output,
       input: v.input,
@@ -1638,11 +2022,13 @@ function renderGstPayment() {
   `;
 
   const tbody = $('#gstTbody');
-  if (!rows.length) {
+  const sortedRows = sortState.gst ? sortRows(rows, 'gst') : rows;
+  if (!sortedRows.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="5">No invoices or purchases recorded yet.</td></tr>`;
+    updateSortIndicators('gst');
     return;
   }
-  tbody.innerHTML = rows.map(r => `
+  tbody.innerHTML = sortedRows.map(r => `
     <tr>
       <td>${escapeHtml(r.period)}</td>
       <td>${fmt(r.output)}</td>
@@ -1651,6 +2037,7 @@ function renderGstPayment() {
       <td>${r.dueDate ? escapeHtml(r.dueDate) : '-'}</td>
     </tr>
   `).join('');
+  updateSortIndicators('gst');
 }
 
 $('#gstAnnualBtn').addEventListener('click', () => {
@@ -2117,15 +2504,33 @@ $('#downloadExportBtn').addEventListener('click', () => {
 /* =====================================================================
    INIT
 ===================================================================== */
+Object.assign(SORT_RENDER_FNS, {
+  products: renderProducts,
+  companies: renderCompanies,
+  quotations: renderQuotations,
+  invoices: renderInvoices,
+  purchases: renderPurchases,
+  purchasesByCompany: renderPurchasesByCompany,
+  expenses: renderExpenses,
+  payments: renderPayments,
+  summaryOutstanding: renderSummaryOutstanding,
+  summarySales: renderSummarySales,
+  pnl: renderProfitLoss,
+  gst: renderGstPayment,
+});
+
 function init() {
   loadProfileForm();
+  populateProductsFilterOptions();
   renderProducts();
   renderCompanies();
   populateCompanyDropdowns();
   renderQuotations();
   renderInvoices();
+  populatePurchasesFilterOptions();
   renderPurchases();
   renderPurchasesByCompany();
+  populateExpensesFilterOptions();
   renderExpenses();
   renderPayments();
   renderSummary();

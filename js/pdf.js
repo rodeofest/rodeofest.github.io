@@ -12,7 +12,12 @@ function fmtDate(iso) {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function drawHeader(doc, profile, docTitle, docNo, docDate, company) {
+function drawHeader(doc, profile, company, opts) {
+  opts = Object.assign({
+    docTitle: '', docNo: '', docDate: '',
+    noLabel: 'No:', dateLabel: 'Date:',
+    extraRightLines: [], toLabel: 'Bill To:', extraLeftLines: [],
+  }, opts || {});
   let y = 16;
   const pageWidth = doc.internal.pageSize.getWidth();
 
@@ -40,20 +45,26 @@ function drawHeader(doc, profile, docTitle, docNo, docDate, company) {
   // Title block, right aligned
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
-  doc.text(docTitle, pageWidth - PAGE_MARGIN, 16, { align: 'right' });
+  doc.text(opts.docTitle, pageWidth - PAGE_MARGIN, 16, { align: 'right' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.text(`No: ${docNo}`, pageWidth - PAGE_MARGIN, 23, { align: 'right' });
-  doc.text(`Date: ${fmtDate(docDate)}`, pageWidth - PAGE_MARGIN, 28, { align: 'right' });
+  let rightY = 23;
+  doc.text(`${opts.noLabel} ${opts.docNo}`, pageWidth - PAGE_MARGIN, rightY, { align: 'right' });
+  rightY += 5;
+  doc.text(`${opts.dateLabel} ${fmtDate(opts.docDate)}`, pageWidth - PAGE_MARGIN, rightY, { align: 'right' });
+  opts.extraRightLines.forEach((line) => {
+    rightY += 5;
+    doc.text(`${line.label} ${line.value}`, pageWidth - PAGE_MARGIN, rightY, { align: 'right' });
+  });
 
-  y = Math.max(y, 36) + 4;
+  y = Math.max(y, rightY + 8) + 4;
   doc.setDrawColor(180);
   doc.line(PAGE_MARGIN, y, pageWidth - PAGE_MARGIN, y);
   y += 7;
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
-  doc.text('Bill To:', PAGE_MARGIN, y);
+  doc.text(opts.toLabel, PAGE_MARGIN, y);
   y += 5;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
@@ -66,6 +77,15 @@ function drawHeader(doc, profile, docTitle, docNo, docDate, company) {
     doc.text(`GSTIN: ${company.gstin}`, PAGE_MARGIN, y);
     y += 4;
   }
+
+  if (opts.extraLeftLines.length) {
+    y += 4;
+  }
+
+  opts.extraLeftLines.forEach((line) => {
+    doc.text(`${line.label} ${line.value}`, PAGE_MARGIN, y);
+    y += 4;
+  });
 
   return y + 4;
 }
@@ -88,16 +108,39 @@ function drawFooter(doc, profile) {
   }
 }
 
-function buildItemRows(items) {
+function computeLineAmounts(it) {
+  const taxable = (Number(it.qty) || 0) * (Number(it.rate) || 0);
+  const tax = taxable * (Number(it.gstPercent) || 0) / 100;
+  return { taxable, tax };
+}
+
+function buildQuotationItemRows(items, showRequired, showAmount) {
   return items.map((it, idx) => {
-    const taxable = (Number(it.qty) || 0) * (Number(it.rate) || 0);
-    const tax = taxable * (Number(it.gstPercent) || 0) / 100;
+    const productCell = it.details ? `${it.name}\n${it.details}` : it.name;
+    const row = [String(idx + 1), productCell, `${it.qty} ${it.unit || ''}`.trim()];
+    if (showRequired) row.push(Number(it.requiredQty) > 0 ? String(it.requiredQty) : '-');
+    row.push(`${fmtMoney(it.rate)} per ${it.unit || 'unit'}`);
+    if (showAmount) {
+      const required = Number(it.requiredQty) || 0;
+      const qty = Number(it.qty) || 0;
+      const rate = Number(it.rate) || 0;
+      const amount = it.amount != null ? Number(it.amount) : (required > 0 ? required : qty) * rate;
+      row.push(fmtMoney(amount));
+    }
+    return row;
+  });
+}
+
+function buildInvoiceItemRows(items) {
+  return items.map((it, idx) => {
+    const { taxable, tax } = computeLineAmounts(it);
     const productCell = it.details ? `${it.name}\n${it.details}` : it.name;
     return [
       String(idx + 1),
       productCell,
       it.hsnCode || '',
-      `${it.qty} ${it.unit || ''}`.trim(),
+      String(it.qty),
+      it.unit || '',
       fmtMoney(it.rate),
       `${it.gstPercent || 0}%`,
       fmtMoney(tax),
@@ -138,12 +181,25 @@ function drawTotalsBlock(doc, startY, totals, displayOptions) {
 function buildQuotationPdf(quotation, company, profile) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
-  const tableStartY = drawHeader(doc, profile, 'QUOTATION', quotation.quotationNo, quotation.date, company);
+  const tableStartY = drawHeader(doc, profile, company, {
+    docTitle: 'QUOTATION',
+    docNo: quotation.quotationNo,
+    docDate: quotation.date,
+    noLabel: 'Quote No:',
+    dateLabel: 'Quote Date:',
+    toLabel: 'To:',
+  });
+
+  const showRequired = quotation.items.some(it => Number(it.requiredQty) > 0);
+  const showAmount = !!(quotation.displayOptions && quotation.displayOptions.showAmount);
+  const head = ['#', 'Product', 'Qty', 'Rate'];
+  if (showRequired) head.splice(3, 0, 'Required');
+  if (showAmount) head.push('Amount');
 
   doc.autoTable({
     startY: tableStartY,
-    head: [['#', 'Product', 'HSN', 'Qty', 'Rate', 'GST%', 'Tax', 'Total']],
-    body: buildItemRows(quotation.items),
+    head: [head],
+    body: buildQuotationItemRows(quotation.items, showRequired, showAmount),
     margin: { left: PAGE_MARGIN, right: PAGE_MARGIN },
     styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
     headStyles: { fillColor: [40, 55, 90] },
@@ -178,16 +234,27 @@ function buildQuotationPdf(quotation, company, profile) {
 function buildInvoicePdf(invoice, company, profile) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
-  const tableStartY = drawHeader(doc, profile, 'TAX INVOICE', invoice.invoiceNo, invoice.date, company);
-
-  doc.setFontSize(9);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Challan No: ${invoice.challanNo || '-'}`, PAGE_MARGIN, tableStartY - 2);
+  const tableStartY = drawHeader(doc, profile, company, {
+    docTitle: 'TAX INVOICE',
+    docNo: invoice.invoiceNo,
+    docDate: invoice.date,
+    noLabel: 'Invoice No:',
+    dateLabel: 'Invoice Date:',
+    extraRightLines: [
+      { label: 'Challan No:', value: invoice.challanNo || (invoice.showChallanDash ? '-' : '') },
+      { label: 'Challan Date:', value: invoice.challanDate ? fmtDate(invoice.challanDate) : (invoice.showChallanDash ? '-' : '') },
+    ],
+    toLabel: 'Bill To:',
+    extraLeftLines: [
+      { label: 'PO No:', value: invoice.poNumber || '' },
+      { label: 'PO Date:', value: invoice.poDate ? fmtDate(invoice.poDate) : '' },
+    ],
+  });
 
   doc.autoTable({
-    startY: tableStartY + 3,
-    head: [['#', 'Product', 'HSN', 'Qty', 'Rate', 'GST%', 'Tax', 'Total']],
-    body: buildItemRows(invoice.items),
+    startY: tableStartY,
+    head: [['#', 'Product', 'HSN', 'Qty', 'Per', 'Rate', 'GST%', 'Tax', 'Amount']],
+    body: buildInvoiceItemRows(invoice.items),
     margin: { left: PAGE_MARGIN, right: PAGE_MARGIN },
     styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
     headStyles: { fillColor: [40, 55, 90] },
@@ -228,19 +295,41 @@ function buildInvoicePdf(invoice, company, profile) {
   ].filter(Boolean);
   doc.text(bankLines.length ? bankLines : ['Bank details not set'], PAGE_MARGIN, y);
 
+  const includeSeal = invoice.includeSeal !== false;
+  const includeSignatory = invoice.includeSignatory !== false;
   const sealX = pageWidth - PAGE_MARGIN - 45;
-  const sealY = y - 5;
-  if (profile.sealDataUrl) {
-    try {
-      doc.addImage(profile.sealDataUrl, 'PNG', sealX, sealY, 40, 40);
-    } catch (e) { /* ignore */ }
-  } else {
-    doc.setDrawColor(180);
-    doc.rect(sealX, sealY, 40, 25);
+  const sealY = y;
+  const sealAreaHeight = 20;
+  const forNameY = sealY - 3;
+  const signatoryY = sealY + sealAreaHeight + 4;
+
+  if (includeSignatory) {
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
-    doc.setTextColor(150);
-    doc.text('Company Seal', sealX + 20, sealY + 13, { align: 'center' });
     doc.setTextColor(0);
+    doc.text(`For ${profile.name || 'Business Name'}`, sealX + 20, forNameY, { align: 'center' });
+  }
+
+  if (includeSeal) {
+    if (profile.sealDataUrl) {
+      try {
+        doc.addImage(profile.sealDataUrl, 'PNG', sealX, sealY, 40, sealAreaHeight);
+      } catch (e) { /* ignore */ }
+    } else {
+      doc.setDrawColor(180);
+      doc.rect(sealX, sealY, 40, sealAreaHeight);
+      doc.setFontSize(8);
+      doc.setTextColor(150);
+      doc.text('Company Seal', sealX + 20, sealY + sealAreaHeight / 2 + 2, { align: 'center' });
+      doc.setTextColor(0);
+    }
+  }
+
+  if (includeSignatory) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(0);
+    doc.text('Authorized Signatory', sealX + 20, signatoryY, { align: 'center' });
   }
 
   drawFooter(doc, profile);

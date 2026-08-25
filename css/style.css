@@ -235,6 +235,32 @@ tbody tr:hover { background: #fafbff; }
 
 .truncate-cell { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* ---- Sortable table headers ---- */
+thead th.sortable { cursor: pointer; user-select: none; }
+thead th.sortable:hover { color: var(--text); }
+thead th.sortable::after { content: '\2195'; margin-left: 6px; font-size: 10px; opacity: 0.3; display: inline-block; }
+thead th.sortable.sort-asc::after { content: '\2191'; opacity: 1; color: var(--accent); }
+thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--accent); }
+
+/* ---- Table filter bars (Products / Company / Purchase / Expenses) ---- */
+.table-filters {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: #fafbff;
+}
+.table-filters input[type="search"] {
+  flex: 1 1 220px; min-width: 180px;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+}
+.table-filters select {
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; background: #fff;
+}
+.table-filters .filter-clear {
+  border: none; background: none; color: var(--accent); font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 4px 6px;
+}
+.table-filters .filter-clear:hover { text-decoration: underline; }
+
 /* ---- Data folder connection gate (blocks the app until a file is connected) ---- */
 .file-gate-overlay {
   position: fixed; inset: 0;
@@ -345,6 +371,7 @@ tbody tr:hover { background: #fafbff; }
 .doc-preview .doc-title { font-weight: 700; font-size: 17px; color: var(--navy); }
 .doc-preview .bill-to { margin-bottom: 14px; }
 .doc-preview .bill-to h4 { margin: 0 0 4px; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); }
+.doc-preview .po-block { margin-bottom: 14px; font-size: 12.5px; }
 .doc-preview table { width: 100%; border-collapse: collapse; margin-bottom: 14px; table-layout: fixed; }
 .doc-preview th { background: var(--navy); color: #fff; padding: 7px 8px; font-size: 11.5px; text-align: left; }
 .doc-preview td { padding: 7px 8px; border-bottom: 1px solid var(--border); font-size: 12.5px; word-wrap: break-word; }
@@ -354,6 +381,8 @@ tbody tr:hover { background: #fafbff; }
 .doc-preview .doc-footer-block { display: flex; justify-content: space-between; align-items: flex-end; border-top: 1px solid var(--border); padding-top: 14px; margin-top: 10px; }
 .doc-preview .seal-box { width: 100px; height: 60px; border: 1px dashed #bbb; display: flex; align-items: center; justify-content: center; color: #aaa; font-size: 11px; text-align: center; }
 .doc-preview .seal-box img { max-width: 100%; max-height: 100%; }
+.doc-preview .seal-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.doc-preview .seal-caption { font-size: 11px; color: var(--text); }
 .doc-preview .doc-address-footer { text-align: center; font-size: 11px; color: var(--text-muted); margin-top: 16px; border-top: 1px dotted var(--border); padding-top: 8px; }
 .doc-preview .doc-terms { margin-top: 14px; padding-top: 10px; border-top: 1px dotted var(--border); font-size: 11.5px; color: var(--text-muted); }
 .doc-preview .doc-terms-title { font-weight: 600; color: var(--text); margin-bottom: 4px; text-transform: uppercase; font-size: 11px; }

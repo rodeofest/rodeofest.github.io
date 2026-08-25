@@ -1,79 +1,927 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Deepesh Khare</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body {
-            margin: 0;
-            font-family: Arial, sans-serif;
-            background: #111;
-            color: white;
-            text-align: center;
-        }
-
-        header {
-            padding: 60px 20px;
-            background: linear-gradient(135deg, #1f1f1f, #333);
-        }
-
-        h1 {
-            font-size: 40px;
-            margin: 0;
-        }
-
-        p {
-            font-size: 18px;
-            color: #ccc;
-        }
-
-        .button {
-            display: inline-block;
-            margin-top: 20px;
-            padding: 12px 25px;
-            background: #00c853;
-            color: white;
-            text-decoration: none;
-            border-radius: 5px;
-            font-weight: bold;
-        }
-
-        .section {
-            padding: 50px 20px;
-        }
-
-        footer {
-            padding: 20px;
-            background: #000;
-            font-size: 14px;
-            color: #777;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Business Suite — Quotations &amp; Invoicing</title>
+<link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 
-<header>
-    <h1>Hi, I'm Deepesh</h1>
-    <p>Trader | Learner | Builder</p>
-    <a href="#about" class="button">Learn More</a>
+<div class="file-gate-overlay" id="fileGateOverlay">
+  <div class="file-gate-card">
+    <h2>Connect Your Data Folder</h2>
+    <p id="fileGateMessage">Checking for a previously connected data folder…</p>
+    <button class="btn btn-primary" id="fileGateSelectBtn" type="button" style="display:none;">Select Data Folder</button>
+  </div>
+</div>
+
+<header class="topbar">
+  <div>
+    <h1>Business Suite</h1>
+    <div class="biz-name" id="topbarBizName">Set up your Business Profile to get started</div>
+    <button class="data-file-indicator" id="dataFileIndicator" type="button" title="Click to view/switch your connected data file">Connecting…</button>
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-secondary" id="btnOpenExport" type="button">Export</button>
+    <div class="settings-menu">
+      <button class="settings-btn" id="btnOpenSettings" type="button" title="Settings">&#9881;</button>
+      <div class="settings-dropdown" id="settingsDropdown">
+        <button type="button" data-settings-action="profile">Business Profile</button>
+        <button type="button" data-settings-action="defaultConfig">Default Configurations</button>
+        <button type="button" data-settings-action="dataFile">Data File</button>
+      </div>
+    </div>
+  </div>
 </header>
 
-<div class="section" id="about">
-    <h2>About Me</h2>
-    <p>
-        I am passionate about trading, markets, and technology.
-        This is my first website hosted on the internet.
-    </p>
+<nav class="tabs tabs-primary">
+  <button class="tab-btn active" data-group="financials">Financials</button>
+  <button class="tab-btn" data-group="sales">Sales</button>
+  <button class="tab-btn" data-tab="purchases">Purchase</button>
+  <button class="tab-btn" data-tab="products">Products</button>
+  <button class="tab-btn" data-tab="companies">Company</button>
+  <button class="tab-btn" data-group="charts">Charts</button>
+</nav>
+
+<nav class="tabs tabs-sub" id="subnav-financials" style="display:flex;">
+  <button class="tab-btn sub active" data-tab="summary">Summary</button>
+  <button class="tab-btn sub" data-tab="pnl">Profit &amp; Loss</button>
+  <button class="tab-btn sub" data-tab="gst">GST Payment</button>
+</nav>
+
+<nav class="tabs tabs-sub" id="subnav-sales">
+  <button class="tab-btn sub" data-tab="quotations">Quotations</button>
+  <button class="tab-btn sub" data-tab="invoices">Invoices</button>
+  <button class="tab-btn sub" data-tab="payments">Payments</button>
+</nav>
+
+<nav class="tabs tabs-sub" id="subnav-charts">
+  <button class="tab-btn sub active" data-tab="companySalesChart">Company Sales</button>
+  <button class="tab-btn sub" data-tab="productSalesChart">Product Sales</button>
+  <button class="tab-btn sub" data-tab="pendingPaymentsChart">Pending Payments</button>
+</nav>
+
+<!-- ===================== PRODUCTS ===================== -->
+<section class="tab-panel" id="tab-products">
+  <div class="panel-header">
+    <h2>Products</h2>
+    <button class="btn btn-primary" id="btnAddProduct">+ Add Product</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Name</th><th>HSN Code</th><th>Details</th><th>Packing Qty</th><th>Unit</th><th>Rate</th><th>GST %</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="productsTbody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== COMPANY ===================== -->
+<section class="tab-panel" id="tab-companies">
+  <div class="panel-header">
+    <h2>Company</h2>
+    <button class="btn btn-primary" id="btnAddCompany">+ Add Company</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Address</th><th>GSTIN</th><th>Payment Terms</th><th>Type</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="companiesTbody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== DEFAULT CONFIGURATIONS ===================== -->
+<!-- ===================== PURCHASE ===================== -->
+<section class="tab-panel" id="tab-purchases">
+  <div class="panel-header">
+    <h2>Purchase Entries</h2>
+    <button class="btn btn-primary" id="btnAddPurchase">+ Add Purchase</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Purchase No</th><th>Date</th><th>Purchase Company</th><th>Total</th><th>GST</th><th>Purchase Total</th><th>Payment Status</th><th>Payment Note</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="purchasesTbody"></tbody>
+    </table>
+  </div>
+
+  <div class="panel-header" style="margin-top:28px;">
+    <h2>Purchases by Company</h2>
+  </div>
+  <div id="purchasesByCompany"></div>
+
+  <div class="panel-header" style="margin-top:28px;">
+    <h2>Cash / Manual Expenses</h2>
+    <button class="btn btn-primary" id="btnAddExpense">+ Add Expense</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="expensesTbody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== QUOTATIONS ===================== -->
+<section class="tab-panel" id="tab-quotations">
+  <div class="panel-header">
+    <h2>Quotations</h2>
+    <button class="btn btn-primary" id="btnAddQuotation">+ Create Quotation</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Quotation No</th><th>Date</th><th>Company</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="quotationsTbody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== INVOICES ===================== -->
+<section class="tab-panel" id="tab-invoices">
+  <div class="panel-header">
+    <h2>Invoices</h2>
+    <button class="btn btn-primary" id="btnAddInvoice">+ Create Invoice</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Invoice No</th><th>Challan No</th><th>Date</th><th>Company</th><th>Total</th><th>GST</th><th>Invoice Total</th><th>Payment</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="invoicesTbody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== PAYMENTS ===================== -->
+<section class="tab-panel" id="tab-payments">
+  <div class="panel-header"><h2>Payments</h2></div>
+  <div id="paymentsByCompany"></div>
+</section>
+
+<!-- ===================== SUMMARY ===================== -->
+<section class="tab-panel active" id="tab-summary">
+  <div class="panel-header"><h2>Summary</h2></div>
+
+  <div class="card" style="padding:18px; margin-bottom:24px;">
+    <h3 style="margin-top:0;">Outstanding by Company</h3>
+    <table>
+      <thead>
+        <tr><th>Company</th><th>Unpaid Invoices</th><th>Total</th><th>GST</th><th>Amount Owed</th><th>Expected Payment Date</th></tr>
+      </thead>
+      <tbody id="summaryOutstandingTbody"></tbody>
+    </table>
+  </div>
+
+  <div class="card" style="padding:18px;">
+    <div class="panel-header" style="margin-bottom:10px;">
+      <h3 style="margin:0;">Sales Over Time</h3>
+      <div class="seg-toggle">
+        <button class="seg-btn active" id="summaryAnnualBtn" type="button">Annual</button>
+        <button class="seg-btn" id="summaryMonthlyBtn" type="button">Monthly</button>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Period</th><th>Sales</th><th>Received</th><th>TDS</th><th>Pending</th></tr>
+      </thead>
+      <tbody id="summarySalesTbody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== PROFIT & LOSS ===================== -->
+<section class="tab-panel" id="tab-pnl">
+  <div class="panel-header">
+    <h2>Profit &amp; Loss</h2>
+    <div class="seg-toggle">
+      <button class="seg-btn active" id="pnlAnnualBtn" type="button">Annual</button>
+      <button class="seg-btn" id="pnlMonthlyBtn" type="button">Monthly</button>
+    </div>
+  </div>
+
+  <div class="stat-cards" id="pnlStatCards"></div>
+
+  <div class="card" style="padding:18px; margin-top:20px;">
+    <div class="panel-header" style="margin-bottom:10px;">
+      <h3 style="margin:0;">By Period</h3>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Period</th><th>Sales</th><th>TDS</th><th>Purchases</th><th>Expenses</th><th>Profit / Loss</th></tr>
+      </thead>
+      <tbody id="pnlTbody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== GST PAYMENT ===================== -->
+<section class="tab-panel" id="tab-gst">
+  <div class="panel-header"><h2>GST Payment</h2></div>
+
+  <div class="stat-cards" id="gstStatCards"></div>
+
+  <div class="card" style="padding:18px; margin-top:20px;">
+    <div class="panel-header" style="margin-bottom:10px;">
+      <h3 style="margin:0;">GST Payable</h3>
+      <div class="seg-toggle">
+        <button class="seg-btn active" id="gstAnnualBtn" type="button">Annual</button>
+        <button class="seg-btn" id="gstMonthlyBtn" type="button">Monthly</button>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Period</th><th>Output GST (Collected)</th><th>Input GST (ITC)</th><th>Net GST Payable</th><th>Due Date</th></tr>
+      </thead>
+      <tbody id="gstTbody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== COMPANY SALES CHART ===================== -->
+<section class="tab-panel" id="tab-companySalesChart">
+  <div class="panel-header"><h2>Company Sales</h2></div>
+
+  <div class="card" style="padding:18px;">
+    <div class="panel-header" style="margin-bottom:10px;">
+      <h3 style="margin:0;">Sales by Company</h3>
+      <div class="seg-toggle">
+        <button class="seg-btn active" id="companySalesViewBreakdownBtn" type="button">Breakdown</button>
+        <button class="seg-btn" id="companySalesViewTrendBtn" type="button">Trend</button>
+      </div>
+    </div>
+    <div class="seg-toggle" id="companySalesTrendToggleRow" style="display:none; margin-bottom:14px;">
+      <button class="seg-btn" id="companySalesMonthlyBtn" type="button">Monthly</button>
+      <button class="seg-btn" id="companySalesQuarterlyBtn" type="button">Quarterly</button>
+      <button class="seg-btn active" id="companySalesAnnualBtn" type="button">FY</button>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="companySalesChartCanvas"></canvas>
+    </div>
+    <div class="card" id="companySalesChartEmpty" style="display:none; box-shadow:none; border:none; text-align:center; color:var(--text-muted); padding:30px 0;">No invoices yet to chart.</div>
+  </div>
+</section>
+
+<!-- ===================== PRODUCT SALES CHART ===================== -->
+<section class="tab-panel" id="tab-productSalesChart">
+  <div class="panel-header"><h2>Product Sales</h2></div>
+
+  <div class="card" style="padding:18px;">
+    <div class="panel-header" style="margin-bottom:10px;">
+      <h3 style="margin:0;">Sales by Product</h3>
+      <div class="seg-toggle">
+        <button class="seg-btn active" id="productSalesViewBreakdownBtn" type="button">Breakdown</button>
+        <button class="seg-btn" id="productSalesViewTrendBtn" type="button">Trend</button>
+      </div>
+    </div>
+    <div class="seg-toggle" id="productSalesTrendToggleRow" style="display:none; margin-bottom:14px;">
+      <button class="seg-btn" id="productSalesMonthlyBtn" type="button">Monthly</button>
+      <button class="seg-btn" id="productSalesQuarterlyBtn" type="button">Quarterly</button>
+      <button class="seg-btn active" id="productSalesAnnualBtn" type="button">FY</button>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="productSalesChartCanvas"></canvas>
+    </div>
+    <div class="card" id="productSalesChartEmpty" style="display:none; box-shadow:none; border:none; text-align:center; color:var(--text-muted); padding:30px 0;">No invoices yet to chart.</div>
+  </div>
+</section>
+
+<!-- ===================== PENDING PAYMENTS CHART ===================== -->
+<section class="tab-panel" id="tab-pendingPaymentsChart">
+  <div class="panel-header"><h2>Pending Payments</h2></div>
+
+  <div class="card" style="padding:18px;">
+    <div class="panel-header" style="margin-bottom:10px;">
+      <h3 style="margin:0;">Outstanding Balance by Company</h3>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="pendingPaymentsChartCanvas"></canvas>
+    </div>
+    <div class="card" id="pendingPaymentsChartEmpty" style="display:none; box-shadow:none; border:none; text-align:center; color:var(--text-muted); padding:30px 0;">No outstanding payments.</div>
+  </div>
+</section>
+
+<!-- ===================== PRODUCT MODAL ===================== -->
+<div class="modal-overlay" id="productModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="productModalTitle">Add Product</h3>
+      <button class="modal-close" data-close="productModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <form id="productForm">
+        <input type="hidden" id="productId">
+        <div class="form-grid">
+          <div class="form-field">
+            <label>Product Name</label>
+            <input type="text" id="productName" required>
+          </div>
+          <div class="form-field">
+            <label>HSN Code</label>
+            <input type="text" id="productHsn" required>
+          </div>
+          <div class="form-field span-2">
+            <label>Product Details</label>
+            <textarea id="productDetails"></textarea>
+          </div>
+          <div class="form-field">
+            <label>Packing Quantity</label>
+            <input type="number" id="productPackingQty" min="0" step="any" required>
+          </div>
+          <div class="form-field">
+            <label>Unit / Metric</label>
+            <select id="productUnit" required></select>
+          </div>
+          <div class="form-field">
+            <label>Rate (per unit)</label>
+            <input type="number" id="productRate" min="0" step="0.01" required>
+          </div>
+          <div class="form-field">
+            <label>GST %</label>
+            <select id="productGst" required></select>
+          </div>
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="productModal">Cancel</button>
+      <button class="btn btn-primary" id="saveProductBtn">Save Product</button>
+    </div>
+  </div>
 </div>
 
-<div class="section">
-    <h2>Contact</h2>
-    <p>Email: your@email.com</p>
+<!-- ===================== COMPANY MODAL ===================== -->
+<div class="modal-overlay" id="companyModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="companyModalTitle">Add Company</h3>
+      <button class="modal-close" data-close="companyModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <form id="companyForm">
+        <input type="hidden" id="companyId">
+        <div class="form-grid">
+          <div class="form-field span-2">
+            <label>Company Name</label>
+            <input type="text" id="companyName" required>
+          </div>
+          <div class="form-field span-2">
+            <label>Address</label>
+            <textarea id="companyAddress"></textarea>
+          </div>
+          <div class="form-field">
+            <label>GSTIN</label>
+            <input type="text" id="companyGstin" maxlength="15" placeholder="e.g. 07ABCDE1234F1Z5">
+          </div>
+          <div class="form-field">
+            <label>Payment Terms (days)</label>
+            <input type="number" id="companyPaymentTerms" min="0" step="1" value="30">
+          </div>
+          <div class="form-field span-2">
+            <label>Company Type</label>
+            <div class="checkbox-row">
+              <label><input type="checkbox" id="companyIsSales"> Sales Company (customer)</label>
+              <label><input type="checkbox" id="companyIsPurchase"> Purchase Company (vendor)</label>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="companyModal">Cancel</button>
+      <button class="btn btn-primary" id="saveCompanyBtn">Save Company</button>
+    </div>
+  </div>
 </div>
 
-<footer>
-    © 2026 Deepesh Khare. All rights reserved.
-</footer>
+<!-- ===================== QUOTATION MODAL (two-step) ===================== -->
+<div class="modal-overlay" id="quotationModal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Create Quotation</h3>
+      <button class="modal-close" data-close="quotationModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="step-indicator">
+        <span class="step active" id="quotationStepLabel1">1. Details</span>
+        <span>&rsaquo;</span>
+        <span class="step" id="quotationStepLabel2">2. Preview</span>
+      </div>
 
+      <!-- Step 1: form -->
+      <div id="quotationStepForm">
+        <input type="hidden" id="quotationId">
+        <div class="form-grid">
+          <div class="form-field">
+            <label>Company</label>
+            <select id="quotationCompany" required></select>
+          </div>
+          <div class="form-field">
+            <label>Date</label>
+            <input type="date" id="quotationDate" required>
+          </div>
+        </div>
+
+        <div class="form-grid" style="margin-top:14px;">
+          <div class="form-field">
+            <label>Add Product</label>
+            <select id="quotationProductPicker"></select>
+          </div>
+          <div class="form-field" style="justify-content:flex-end;">
+            <button type="button" class="btn btn-secondary" id="quotationAddLineBtn">+ Add Line Item</button>
+          </div>
+        </div>
+
+        <table class="line-items-table" id="quotationLineItemsTable">
+          <thead>
+            <tr><th class="product-col">Product</th><th>HSN</th><th class="num-col">Qty</th><th>Unit</th><th class="num-col">Rate</th><th class="num-col">GST%</th><th></th></tr>
+          </thead>
+          <tbody id="quotationLineItemsBody"></tbody>
+        </table>
+
+        <div class="totals-box" id="quotationTotalsBox"></div>
+
+        <div class="display-options">
+          <span class="display-options-label">Show on Quotation:</span>
+          <label><input type="checkbox" id="quotationShowSubtotal"> Subtotal</label>
+          <label><input type="checkbox" id="quotationShowTax"> Tax (CGST/SGST/IGST)</label>
+          <label><input type="checkbox" id="quotationShowGrandTotal"> Grand Total</label>
+        </div>
+      </div>
+
+      <!-- Step 2: preview -->
+      <div id="quotationStepPreview" style="display:none;">
+        <div class="doc-preview" id="quotationPreviewContent"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="quotationModal">Cancel</button>
+      <span class="spacer"></span>
+      <button class="btn btn-secondary" id="quotationEditBtn" style="display:none;">Edit</button>
+      <button class="btn btn-secondary" id="quotationDownloadBtn" style="display:none;">Download PDF</button>
+      <button class="btn btn-primary" id="quotationNextBtn">Next: Preview</button>
+      <button class="btn btn-primary" id="quotationConfirmBtn" style="display:none;">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== INVOICE MODAL (two-step) ===================== -->
+<div class="modal-overlay" id="invoiceModal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Create Invoice</h3>
+      <button class="modal-close" data-close="invoiceModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="step-indicator">
+        <span class="step active" id="invoiceStepLabel1">1. Details</span>
+        <span>&rsaquo;</span>
+        <span class="step" id="invoiceStepLabel2">2. Preview</span>
+      </div>
+
+      <!-- Step 1: form -->
+      <div id="invoiceStepForm">
+        <input type="hidden" id="invoiceId">
+        <div class="form-grid">
+          <div class="form-field">
+            <label>Company</label>
+            <select id="invoiceCompany" required></select>
+          </div>
+          <div class="form-field">
+            <label>Date</label>
+            <input type="date" id="invoiceDate" required>
+          </div>
+          <div class="form-field">
+            <label>Invoice No</label>
+            <input type="text" id="invoiceNo" required>
+          </div>
+          <div class="form-field">
+            <label>Challan No</label>
+            <input type="text" id="invoiceChallanNo">
+          </div>
+        </div>
+
+        <div class="form-grid" style="margin-top:14px;">
+          <div class="form-field">
+            <label>Add Product</label>
+            <select id="invoiceProductPicker"></select>
+          </div>
+          <div class="form-field" style="justify-content:flex-end;">
+            <button type="button" class="btn btn-secondary" id="invoiceAddLineBtn">+ Add Line Item</button>
+          </div>
+        </div>
+
+        <table class="line-items-table" id="invoiceLineItemsTable">
+          <thead>
+            <tr><th class="product-col">Product</th><th>HSN</th><th class="num-col">Qty</th><th>Unit</th><th class="num-col">Rate</th><th class="num-col">GST%</th><th></th></tr>
+          </thead>
+          <tbody id="invoiceLineItemsBody"></tbody>
+        </table>
+
+        <div class="totals-box" id="invoiceTotalsBox"></div>
+      </div>
+
+      <!-- Step 2: preview -->
+      <div id="invoiceStepPreview" style="display:none;">
+        <div class="doc-preview" id="invoicePreviewContent"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="invoiceModal">Cancel</button>
+      <span class="spacer"></span>
+      <button class="btn btn-secondary" id="invoiceEditBtn" style="display:none;">Edit</button>
+      <button class="btn btn-secondary" id="invoiceDownloadBtn" style="display:none;">Download PDF</button>
+      <button class="btn btn-primary" id="invoiceNextBtn">Next: Preview</button>
+      <button class="btn btn-primary" id="invoiceConfirmBtn" style="display:none;">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== PURCHASE MODAL (single-step, no PDF) ===================== -->
+<div class="modal-overlay" id="purchaseModal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3 id="purchaseModalTitle">Add Purchase</h3>
+      <button class="modal-close" data-close="purchaseModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="purchaseId">
+      <div class="form-grid">
+        <div class="form-field">
+          <label>Purchase Company</label>
+          <select id="purchaseCompany" required></select>
+        </div>
+        <div class="form-field">
+          <label>Date</label>
+          <input type="date" id="purchaseDate" required>
+        </div>
+        <div class="form-field">
+          <label>Purchase No</label>
+          <input type="text" id="purchaseNo" required>
+        </div>
+      </div>
+
+      <div class="form-grid" style="margin-top:14px;">
+        <div class="form-field">
+          <label>Add Product</label>
+          <select id="purchaseProductPicker"></select>
+        </div>
+        <div class="form-field" style="justify-content:flex-end;">
+          <button type="button" class="btn btn-secondary" id="purchaseAddLineBtn">+ Add Line Item</button>
+        </div>
+      </div>
+
+      <table class="line-items-table" id="purchaseLineItemsTable">
+        <thead>
+          <tr><th class="product-col">Product</th><th>HSN</th><th class="num-col">Qty</th><th>Unit</th><th class="num-col">Cost Rate</th><th class="num-col">GST%</th><th></th></tr>
+        </thead>
+        <tbody id="purchaseLineItemsBody"></tbody>
+      </table>
+
+      <div class="totals-box" id="purchaseTotalsBox"></div>
+
+      <div class="form-grid" style="margin-top:14px;">
+        <div class="form-field">
+          <label>Payment to Seller</label>
+          <label style="display:flex; align-items:center; gap:6px; font-weight:400; margin-top:6px;">
+            <input type="checkbox" id="purchasePaymentDone"> Payment Done
+          </label>
+        </div>
+        <div class="form-field span-2">
+          <label>Payment Details</label>
+          <input type="text" id="purchasePaymentNote" placeholder="e.g. Paid via NEFT on 12 Aug, Ref #123">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="purchaseModal">Cancel</button>
+      <button class="btn btn-primary" id="savePurchaseBtn">Save Purchase</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== EXPENSE MODAL ===================== -->
+<div class="modal-overlay" id="expenseModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="expenseModalTitle">Add Expense</h3>
+      <button class="modal-close" data-close="expenseModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <form id="expenseForm">
+        <input type="hidden" id="expenseId">
+        <div class="form-grid">
+          <div class="form-field">
+            <label>Date</label>
+            <input type="date" id="expenseDate" required>
+          </div>
+          <div class="form-field">
+            <label>Category</label>
+            <select id="expenseCategory" required></select>
+          </div>
+          <div class="form-field span-2">
+            <label>Description</label>
+            <textarea id="expenseDescription"></textarea>
+          </div>
+          <div class="form-field">
+            <label>Amount</label>
+            <input type="number" id="expenseAmount" min="0" step="0.01" required>
+          </div>
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="expenseModal">Cancel</button>
+      <button class="btn btn-primary" id="saveExpenseBtn">Save Expense</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== CONFIG ITEM MODAL (shared by all Default Configurations tables) ===================== -->
+<!-- ===================== DEFAULT CONFIGURATIONS MODAL (opened via settings icon) ===================== -->
+<div class="modal-overlay" id="defaultConfigModal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Default Configurations</h3>
+      <button class="modal-close" data-close="defaultConfigModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="panel-header">
+        <h3 style="margin:0;">Units / Metrics</h3>
+        <button class="btn btn-primary btn-sm" data-add-config="unit">+ Add Unit</button>
+      </div>
+      <div class="card" style="margin-bottom:24px;">
+        <table>
+          <thead><tr><th>Name</th><th>Actions</th></tr></thead>
+          <tbody id="unitsConfigTbody"></tbody>
+        </table>
+      </div>
+
+      <div class="panel-header">
+        <h3 style="margin:0;">GST Rates (%)</h3>
+        <button class="btn btn-primary btn-sm" data-add-config="gstRate">+ Add GST Rate</button>
+      </div>
+      <div class="card" style="margin-bottom:24px;">
+        <table>
+          <thead><tr><th>Rate (%)</th><th>Actions</th></tr></thead>
+          <tbody id="gstRatesConfigTbody"></tbody>
+        </table>
+      </div>
+
+      <div class="panel-header">
+        <h3 style="margin:0;">Expense Categories</h3>
+        <button class="btn btn-primary btn-sm" data-add-config="expenseCategory">+ Add Category</button>
+      </div>
+      <div class="card" style="margin-bottom:24px;">
+        <table>
+          <thead><tr><th>Name</th><th>Actions</th></tr></thead>
+          <tbody id="expenseCategoriesConfigTbody"></tbody>
+        </table>
+      </div>
+
+      <div class="panel-header">
+        <h3 style="margin:0;">Terms &amp; Conditions</h3>
+        <button class="btn btn-primary btn-sm" data-add-config="term">+ Add Term</button>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>Text</th><th>Actions</th></tr></thead>
+          <tbody id="termsConfigTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="configItemModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="configItemModalTitle">Add Item</h3>
+      <button class="modal-close" data-close="configItemModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="configItemType">
+      <input type="hidden" id="configItemId">
+      <div class="form-field" id="configItemTextFieldWrap">
+        <label id="configItemFieldLabel">Name</label>
+        <input type="text" id="configItemTextValue">
+      </div>
+      <div class="form-field" id="configItemNumberFieldWrap" style="display:none;">
+        <label>GST Rate (%)</label>
+        <input type="number" id="configItemNumberValue" min="0" max="100" step="0.01">
+      </div>
+      <div class="form-field" id="configItemTextareaFieldWrap" style="display:none;">
+        <label>Clause Text</label>
+        <textarea id="configItemTextareaValue"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="configItemModal">Cancel</button>
+      <button class="btn btn-primary" id="saveConfigItemBtn">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== PAYMENT MODAL ===================== -->
+<div class="modal-overlay" id="paymentModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Record Payment</h3>
+      <button class="modal-close" data-close="paymentModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="paymentInvoiceId">
+      <div class="form-grid">
+        <div class="form-field">
+          <label>Invoice Total</label>
+          <input type="text" id="paymentInvoiceTotal" readonly>
+        </div>
+        <div class="form-field">
+          <label>Amount Received *</label>
+          <input type="number" id="paymentAmountReceived" min="0" step="0.01" required>
+        </div>
+        <div class="form-field">
+          <label>Payment Date *</label>
+          <input type="date" id="paymentDate" required>
+        </div>
+        <div class="form-field" id="paymentShortfallWrap" style="display:none;">
+          <label>Classify Shortfall As</label>
+          <select id="paymentShortfallType">
+            <option value="pending">Pending Amount</option>
+            <option value="tds">TDS Deducted</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-hint" id="paymentShortfallHint" style="margin-top:8px;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="paymentModal">Cancel</button>
+      <button class="btn btn-primary" id="savePaymentBtn">Save Payment</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== BUSINESS PROFILE MODAL (opened via settings icon) ===================== -->
+<div class="modal-overlay" id="profileModal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Business Profile</h3>
+      <button class="modal-close" data-close="profileModal">&times;</button>
+    </div>
+    <form id="profileForm">
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="form-field">
+            <label>Business Name</label>
+            <input type="text" id="profName" required>
+          </div>
+          <div class="form-field">
+            <label>GSTIN</label>
+            <input type="text" id="profGstin" maxlength="15" placeholder="e.g. 27ABCDE1234F1Z5">
+          </div>
+          <div class="form-field span-2">
+            <label>Address</label>
+            <textarea id="profAddress" placeholder="Shown in the PDF header and footer"></textarea>
+          </div>
+          <div class="form-field">
+            <label>Logo</label>
+            <div class="upload-row">
+              <img id="profLogoPreview" class="upload-preview" src="" alt="" style="display:none;">
+              <input type="file" id="profLogoFile" accept="image/*">
+            </div>
+          </div>
+          <div class="form-field">
+            <label>Company Seal / Stamp</label>
+            <div class="upload-row">
+              <img id="profSealPreview" class="upload-preview" src="" alt="" style="display:none;">
+              <input type="file" id="profSealFile" accept="image/*">
+            </div>
+          </div>
+          <div class="form-field">
+            <label>Bank Name</label>
+            <input type="text" id="profBankName">
+          </div>
+          <div class="form-field">
+            <label>Account Number</label>
+            <input type="text" id="profBankAccountNo">
+          </div>
+          <div class="form-field">
+            <label>IFSC Code</label>
+            <input type="text" id="profBankIFSC">
+          </div>
+          <div class="form-field">
+            <label>Branch</label>
+            <input type="text" id="profBankBranch">
+          </div>
+        </div>
+        <div class="form-hint" style="margin-top:6px;">Bank details &amp; seal appear on Invoice PDFs only. Logo, name &amp; address appear on both Quotations and Invoices.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-danger" id="clearProfileBtn">Clear All Data</button>
+        <span class="spacer"></span>
+        <button type="submit" class="btn btn-primary">Save Business Profile</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ===================== DATA FILE MODAL (opened via settings icon / header indicator) ===================== -->
+<div class="modal-overlay" id="dataFileModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Data File</h3>
+      <button class="modal-close" data-close="dataFileModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p>All your data (products, companies, quotations, invoices, purchases, expenses, and configuration) is stored in one real file on disk — not inside the browser.</p>
+      <div class="form-field">
+        <label>Connected Folder / File</label>
+        <input type="text" id="dataFilePathText" readonly>
+      </div>
+      <div class="form-hint">Browsers don't expose a file's full absolute path for privacy reasons, so only the folder name and file name are shown above.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="dataFileModal">Close</button>
+      <button class="btn btn-primary" id="switchDataFolderBtn" type="button">Switch Folder…</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== EXPORT MODAL ===================== -->
+<div class="modal-overlay" id="exportModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Export to Excel</h3>
+      <button class="modal-close" data-close="exportModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-field">
+        <label>What would you like to export?</label>
+        <select id="exportType">
+          <option value="invoicesByPeriod">Invoices — Monthly / Financial Year</option>
+          <option value="fySummary">Financial Year Summary (Sales, Payments, Purchases, Expenses)</option>
+          <option value="invoicesByCompany">Invoices — Specific Company</option>
+        </select>
+      </div>
+
+      <div id="exportPeriodFields">
+        <div class="form-field">
+          <label>Period Type</label>
+          <div class="seg-toggle">
+            <button class="seg-btn active" id="exportPeriodModeMonthlyBtn" type="button">Monthly</button>
+            <button class="seg-btn" id="exportPeriodModeAnnualBtn" type="button">Financial Year</button>
+          </div>
+        </div>
+        <div class="form-field">
+          <label>Period</label>
+          <select id="exportPeriodValue"></select>
+        </div>
+      </div>
+
+      <div id="exportFYFields" style="display:none;">
+        <div class="form-field">
+          <label>Financial Year</label>
+          <select id="exportFYValue"></select>
+        </div>
+      </div>
+
+      <div id="exportCompanyFields" style="display:none;">
+        <div class="form-field">
+          <label>Company</label>
+          <select id="exportCompanyId"></select>
+        </div>
+      </div>
+
+      <div class="form-hint" id="exportHint" style="margin-top:6px;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="exportModal">Cancel</button>
+      <button class="btn btn-primary" id="downloadExportBtn">Download Excel</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- jsPDF + autotable (vendored locally, see js/external_*.js) -->
+<script src="js/external_jspdf.umd.min.js"></script>
+<script src="js/external_jspdf.plugin.autotable.min.js"></script>
+<script src="js/external_chart.min.js"></script>
+<script src="js/external_xlsx.full.min.js"></script>
+
+<script src="js/storage.js"></script>
+<script src="js/numberToWords.js"></script>
+<script src="js/gst.js"></script>
+<script src="js/numbering.js"></script>
+<script src="js/pdf.js"></script>
+<script src="js/app.js"></script>
 </body>
 </html>

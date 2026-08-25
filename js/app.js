@@ -1,0 +1,2137 @@
+/* UI wiring: tabs, CRUD tables, modals, quotation/invoice two-step flow, payments. */
+
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function toast(msg) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+function openModal(id) { $('#' + id).classList.add('open'); }
+function closeModal(id) { $('#' + id).classList.remove('open'); }
+
+document.addEventListener('click', (e) => {
+  if (e.target.matches('[data-close]')) {
+    closeModal(e.target.getAttribute('data-close'));
+  }
+  if (e.target.classList.contains('modal-overlay')) {
+    e.target.classList.remove('open');
+  }
+});
+
+/* ---------------- Tabs (two-level: primary + Sales/Financials sub-navs) ---------------- */
+const tabGroups = { sales: ['quotations', 'invoices', 'payments'], financials: ['summary', 'pnl', 'gst'], charts: ['companySalesChart', 'productSalesChart', 'pendingPaymentsChart'] };
+const lastSubTab = { sales: 'quotations', financials: 'summary', charts: 'companySalesChart' };
+
+function groupForTab(tabId) {
+  return Object.keys(tabGroups).find(g => tabGroups[g].includes(tabId)) || null;
+}
+
+function activateTab(tabId) {
+  $$('.tab-panel').forEach(p => p.classList.remove('active'));
+  $('#tab-' + tabId).classList.add('active');
+  if (tabId === 'summary') renderSummary();
+  if (tabId === 'pnl') renderProfitLoss();
+  if (tabId === 'gst') renderGstPayment();
+  if (tabId === 'companySalesChart') renderCompanySalesChart();
+  if (tabId === 'productSalesChart') renderProductSalesChart();
+  if (tabId === 'pendingPaymentsChart') renderPendingPaymentsChart();
+}
+
+function setPrimaryActive(tabIdOrGroup) {
+  $$('.tabs-primary .tab-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tabIdOrGroup || b.dataset.group === tabIdOrGroup);
+  });
+}
+
+function showSubnav(group) {
+  $$('.tabs-sub').forEach(nav => nav.style.display = 'none');
+  $$('.tabs-sub .tab-btn').forEach(b => b.classList.remove('active'));
+  if (group) {
+    const nav = $('#subnav-' + group);
+    nav.style.display = 'flex';
+    const activeSubId = lastSubTab[group];
+    const activeBtn = nav.querySelector(`[data-tab="${activeSubId}"]`);
+    if (activeBtn) activeBtn.classList.add('active');
+  }
+}
+
+$$('.tabs-primary .tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.group) {
+      const group = btn.dataset.group;
+      setPrimaryActive(group);
+      showSubnav(group);
+      activateTab(lastSubTab[group]);
+    } else {
+      setPrimaryActive(btn.dataset.tab);
+      showSubnav(null);
+      activateTab(btn.dataset.tab);
+    }
+  });
+});
+
+$$('.tabs-sub .tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const group = groupForTab(btn.dataset.tab);
+    lastSubTab[group] = btn.dataset.tab;
+    $$('.tabs-sub .tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activateTab(btn.dataset.tab);
+  });
+});
+
+function fmt(n) {
+  return (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtDateShort(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+function addDays(iso, days) {
+  const d = new Date(iso);
+  d.setDate(d.getDate() + (Number(days) || 0));
+  return d.toISOString().slice(0, 10);
+}
+function invoiceBalance(inv) {
+  const received = inv.payment && inv.payment.received ? Number(inv.payment.amountReceived) || 0 : 0;
+  const tdsSettled = inv.payment && inv.payment.received && inv.payment.shortfallType === 'tds' ? Number(inv.payment.shortfallAmount) || 0 : 0;
+  return (Number(inv.total) || 0) - received - tdsSettled;
+}
+function expectedPaymentDate(inv) {
+  if (invoiceBalance(inv) <= 0.009) return '-';
+  const company = Store.getCompanies().find(c => c.id === inv.companyId);
+  if (!company) return '-';
+  return fmtDateShort(addDays(inv.date, company.paymentTermsDays));
+}
+function companyName(id) {
+  const c = Store.getCompanies().find(c => c.id === id);
+  return c ? c.name : '(unknown)';
+}
+
+/* =====================================================================
+   PRODUCTS
+===================================================================== */
+function renderProducts() {
+  const tbody = $('#productsTbody');
+  const products = Store.getProducts();
+  if (!products.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">No products yet. Click "Add Product" to create one.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = products.map(p => `
+    <tr>
+      <td>${escapeHtml(p.name)}</td>
+      <td>${escapeHtml(p.hsnCode)}</td>
+      <td>${escapeHtml(p.details || '')}</td>
+      <td>${p.packingQty}</td>
+      <td>${escapeHtml(p.unit)}</td>
+      <td>${fmt(p.rate)}</td>
+      <td>${p.gstPercent}%</td>
+      <td class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-product="${p.id}">Edit</button>
+        <button class="btn btn-danger btn-sm" data-delete-product="${p.id}">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function escapeHtml(s) {
+  if (s === undefined || s === null) return '';
+  return String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+}
+
+function openProductModal(product) {
+  $('#productModalTitle').textContent = product ? 'Edit Product' : 'Add Product';
+  $('#productId').value = product ? product.id : '';
+  $('#productName').value = product ? product.name : '';
+  $('#productHsn').value = product ? product.hsnCode : '';
+  $('#productDetails').value = product ? (product.details || '') : '';
+  $('#productPackingQty').value = product ? product.packingQty : '';
+  populateUnitOptions(product ? product.unit : undefined);
+  $('#productRate').value = product ? product.rate : '';
+  const defaultGstRate = Store.getGstRates().find(r => r.value === 18) || Store.getGstRates()[0];
+  populateGstRateOptions($('#productGst'), product ? product.gstPercent : (defaultGstRate ? defaultGstRate.value : undefined));
+  openModal('productModal');
+}
+
+$('#btnAddProduct').addEventListener('click', () => openProductModal(null));
+
+$('#saveProductBtn').addEventListener('click', () => {
+  const form = $('#productForm');
+  if (!form.reportValidity()) return;
+  const product = {
+    id: $('#productId').value || undefined,
+    name: $('#productName').value.trim(),
+    hsnCode: $('#productHsn').value.trim(),
+    details: $('#productDetails').value.trim(),
+    packingQty: Number($('#productPackingQty').value),
+    unit: $('#productUnit').value.trim(),
+    rate: Number($('#productRate').value),
+    gstPercent: Number($('#productGst').value),
+  };
+  Store.saveProduct(product);
+  closeModal('productModal');
+  renderProducts();
+  toast('Product saved');
+});
+
+document.addEventListener('click', (e) => {
+  const editId = e.target.getAttribute && e.target.getAttribute('data-edit-product');
+  if (editId) openProductModal(Store.getProducts().find(p => p.id === editId));
+  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-product');
+  if (delId) {
+    if (confirm('Delete this product?')) { Store.deleteProduct(delId); renderProducts(); toast('Product deleted'); }
+  }
+});
+
+/* =====================================================================
+   COMPANY (unified sales customers + purchase vendors)
+===================================================================== */
+function companyTypeBadges(c) {
+  const badges = [];
+  if (c.isSalesCompany) badges.push('<span class="badge badge-success">Sales</span>');
+  if (c.isPurchaseCompany) badges.push('<span class="badge badge-warning">Purchase</span>');
+  return badges.join(' ') || '<span class="badge badge-muted">None</span>';
+}
+
+function renderCompanies() {
+  const tbody = $('#companiesTbody');
+  const companies = Store.getCompanies();
+  if (!companies.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No companies yet. Click "Add Company" to create one.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = companies.map(c => `
+    <tr>
+      <td>${escapeHtml(c.name)}</td>
+      <td>${escapeHtml(c.address || '')}</td>
+      <td>${escapeHtml(c.gstin || '')}</td>
+      <td>Net ${Number(c.paymentTermsDays) || 0} days</td>
+      <td>${companyTypeBadges(c)}</td>
+      <td class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-company="${c.id}">Edit</button>
+        <button class="btn btn-danger btn-sm" data-delete-company="${c.id}">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function openCompanyModal(company) {
+  $('#companyModalTitle').textContent = company ? 'Edit Company' : 'Add Company';
+  $('#companyId').value = company ? company.id : '';
+  $('#companyName').value = company ? company.name : '';
+  $('#companyAddress').value = company ? (company.address || '') : '';
+  $('#companyGstin').value = company ? (company.gstin || '') : '';
+  $('#companyPaymentTerms').value = company ? (Number(company.paymentTermsDays) || 0) : 30;
+  $('#companyIsSales').checked = company ? !!company.isSalesCompany : true;
+  $('#companyIsPurchase').checked = company ? !!company.isPurchaseCompany : false;
+  openModal('companyModal');
+}
+
+$('#btnAddCompany').addEventListener('click', () => openCompanyModal(null));
+
+$('#saveCompanyBtn').addEventListener('click', () => {
+  const form = $('#companyForm');
+  if (!form.reportValidity()) return;
+  const company = {
+    id: $('#companyId').value || undefined,
+    name: $('#companyName').value.trim(),
+    address: $('#companyAddress').value.trim(),
+    gstin: $('#companyGstin').value.trim().toUpperCase(),
+    paymentTermsDays: Number($('#companyPaymentTerms').value) || 0,
+    isSalesCompany: $('#companyIsSales').checked,
+    isPurchaseCompany: $('#companyIsPurchase').checked,
+  };
+  Store.saveCompany(company);
+  closeModal('companyModal');
+  renderCompanies();
+  populateCompanyDropdowns();
+  toast('Company saved');
+});
+
+document.addEventListener('click', (e) => {
+  const editId = e.target.getAttribute && e.target.getAttribute('data-edit-company');
+  if (editId) openCompanyModal(Store.getCompanies().find(c => c.id === editId));
+  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-company');
+  if (delId) {
+    if (confirm('Delete this company?')) { Store.deleteCompany(delId); renderCompanies(); populateCompanyDropdowns(); toast('Company deleted'); }
+  }
+});
+
+/* =====================================================================
+   BUSINESS PROFILE
+===================================================================== */
+function loadProfileForm() {
+  const p = Store.getProfile();
+  $('#profName').value = p.name || '';
+  $('#profGstin').value = p.gstin || '';
+  $('#profAddress').value = p.address || '';
+  $('#profBankName').value = p.bankName || '';
+  $('#profBankAccountNo').value = p.bankAccountNo || '';
+  $('#profBankIFSC').value = p.bankIFSC || '';
+  $('#profBankBranch').value = p.bankBranch || '';
+  setImagePreview('#profLogoPreview', p.logoDataUrl);
+  setImagePreview('#profSealPreview', p.sealDataUrl);
+  $('#topbarBizName').textContent = p.name ? `${p.name} — Quotations & Invoicing` : 'Set up your Business Profile to get started';
+}
+
+function setImagePreview(sel, dataUrl) {
+  const img = $(sel);
+  if (dataUrl) { img.src = dataUrl; img.style.display = 'block'; } else { img.style.display = 'none'; }
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+let pendingLogoDataUrl = null;
+let pendingSealDataUrl = null;
+
+$('#profLogoFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  pendingLogoDataUrl = await fileToDataUrl(file);
+  setImagePreview('#profLogoPreview', pendingLogoDataUrl);
+});
+$('#profSealFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  pendingSealDataUrl = await fileToDataUrl(file);
+  setImagePreview('#profSealPreview', pendingSealDataUrl);
+});
+
+$('#profileForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const existing = Store.getProfile();
+  const profile = {
+    name: $('#profName').value.trim(),
+    gstin: $('#profGstin').value.trim().toUpperCase(),
+    address: $('#profAddress').value.trim(),
+    bankName: $('#profBankName').value.trim(),
+    bankAccountNo: $('#profBankAccountNo').value.trim(),
+    bankIFSC: $('#profBankIFSC').value.trim().toUpperCase(),
+    bankBranch: $('#profBankBranch').value.trim(),
+    logoDataUrl: pendingLogoDataUrl || existing.logoDataUrl || '',
+    sealDataUrl: pendingSealDataUrl || existing.sealDataUrl || '',
+  };
+  Store.saveProfile(profile);
+  loadProfileForm();
+  closeModal('profileModal');
+  toast('Business profile saved');
+});
+
+$('#btnOpenSettings').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('#settingsDropdown').classList.toggle('open');
+});
+
+$('#settingsDropdown').addEventListener('click', (e) => {
+  const action = e.target.getAttribute('data-settings-action');
+  if (!action) return;
+  $('#settingsDropdown').classList.remove('open');
+  if (action === 'profile') {
+    loadProfileForm();
+    openModal('profileModal');
+  } else if (action === 'defaultConfig') {
+    renderAllConfigTables();
+    openModal('defaultConfigModal');
+  } else if (action === 'dataFile') {
+    openDataFileModal();
+  }
+});
+
+function openDataFileModal() {
+  $('#dataFilePathText').value = Store.dataFileLabel;
+  openModal('dataFileModal');
+}
+$('#dataFileIndicator').addEventListener('click', openDataFileModal);
+
+$('#switchDataFolderBtn').addEventListener('click', async () => {
+  try {
+    const switched = await Store.switchDataFolder();
+    if (switched) {
+      closeModal('dataFileModal');
+      init();
+      toast('Switched data folder');
+    }
+  } catch (e) {
+    toast('Could not switch data folder: ' + (e.message || e));
+  }
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.settings-menu')) {
+    $('#settingsDropdown').classList.remove('open');
+  }
+});
+
+$('#clearProfileBtn').addEventListener('click', () => {
+  if (!confirm('Clear all Business Profile data, including the logo and seal? This cannot be undone.')) return;
+  pendingLogoDataUrl = null;
+  pendingSealDataUrl = null;
+  $('#profLogoFile').value = '';
+  $('#profSealFile').value = '';
+  Store.saveProfile({
+    name: '', address: '', gstin: '', logoDataUrl: '',
+    bankName: '', bankAccountNo: '', bankIFSC: '', bankBranch: '', sealDataUrl: '',
+  });
+  loadProfileForm();
+  toast('Business profile cleared');
+});
+
+/* =====================================================================
+   Shared: company dropdowns & product picker
+===================================================================== */
+function populateCompanyDropdowns() {
+  const companies = Store.getCompanies();
+  const salesOpts = companies.filter(c => c.isSalesCompany).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  const purchaseOpts = companies.filter(c => c.isPurchaseCompany).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  $('#quotationCompany').innerHTML = `<option value="">-- Select Company --</option>` + salesOpts;
+  $('#invoiceCompany').innerHTML = `<option value="">-- Select Company --</option>` + salesOpts;
+  $('#purchaseCompany').innerHTML = `<option value="">-- Select Purchase Company --</option>` + purchaseOpts;
+}
+
+function populateProductPicker(selectEl) {
+  const products = Store.getProducts();
+  selectEl.innerHTML = `<option value="">-- Select Product --</option>` +
+    products.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${escapeHtml(p.unit)})</option>`).join('');
+}
+
+/* =====================================================================
+   Quotation / Invoice shared line-item + totals engine
+===================================================================== */
+const draft = { quotation: { items: [] }, invoice: { items: [] }, purchase: { items: [] } };
+
+function companiesStoreForKind(kind) {
+  const companies = Store.getCompanies();
+  return kind === 'purchase' ? companies.filter(c => c.isPurchaseCompany) : companies.filter(c => c.isSalesCompany);
+}
+
+function addLineItemToDraft(kind, productId) {
+  const product = Store.getProducts().find(p => p.id === productId);
+  if (!product) return;
+  draft[kind].items.push({
+    productId: product.id,
+    name: product.name,
+    hsnCode: product.hsnCode,
+    unit: product.unit,
+    qty: 1,
+    rate: product.rate,
+    gstPercent: product.gstPercent,
+    details: product.details || '',
+  });
+  renderLineItems(kind);
+}
+
+function renderLineItems(kind) {
+  const tbody = $('#' + kind + 'LineItemsBody');
+  const items = draft[kind].items;
+  if (!items.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">No line items added yet.</td></tr>`;
+  } else {
+    tbody.innerHTML = items.map((it, idx) => `
+      <tr>
+        <td>${escapeHtml(it.name)}</td>
+        <td>${escapeHtml(it.hsnCode)}</td>
+        <td class="num-col"><input type="number" min="0" step="any" value="${it.qty}" data-line-field="qty" data-line-idx="${idx}" data-line-kind="${kind}"></td>
+        <td>${escapeHtml(it.unit)}</td>
+        <td class="num-col"><input type="number" min="0" step="0.01" value="${it.rate}" data-line-field="rate" data-line-idx="${idx}" data-line-kind="${kind}"></td>
+        <td class="num-col"><select data-line-field="gstPercent" data-line-idx="${idx}" data-line-kind="${kind}" data-line-gst-select></select></td>
+        <td><button type="button" class="remove-line" data-remove-line="${idx}" data-remove-kind="${kind}">&times;</button></td>
+      </tr>
+      <tr class="line-details-row">
+        <td colspan="7"><textarea placeholder="Additional details for this line (optional)" data-line-field="details" data-line-idx="${idx}" data-line-kind="${kind}">${escapeHtml(it.details || '')}</textarea></td>
+      </tr>`
+    ).join('');
+    $$('[data-line-gst-select]', tbody).forEach(sel => {
+      const idx = Number(sel.getAttribute('data-line-idx'));
+      populateGstRateOptions(sel, items[idx].gstPercent);
+    });
+  }
+  renderTotalsBox(kind);
+}
+
+function handleLineFieldChange(e) {
+  const field = e.target.getAttribute('data-line-field');
+  if (!field) return;
+  const kind = e.target.getAttribute('data-line-kind');
+  const idx = Number(e.target.getAttribute('data-line-idx'));
+  if (field === 'details') {
+    draft[kind].items[idx].details = e.target.value;
+    return;
+  }
+  draft[kind].items[idx][field] = Number(e.target.value);
+  renderTotalsBox(kind);
+}
+document.addEventListener('input', handleLineFieldChange);
+document.addEventListener('change', handleLineFieldChange);
+
+document.addEventListener('click', (e) => {
+  const removeIdx = e.target.getAttribute('data-remove-line');
+  if (removeIdx !== null && removeIdx !== undefined && e.target.hasAttribute('data-remove-line')) {
+    const kind = e.target.getAttribute('data-remove-kind');
+    draft[kind].items.splice(Number(removeIdx), 1);
+    renderLineItems(kind);
+  }
+});
+
+function currentInterState(kind) {
+  const companySel = $('#' + kind + 'Company');
+  const companyId = companySel ? companySel.value : '';
+  const company = companiesStoreForKind(kind).find(c => c.id === companyId);
+  const profile = Store.getProfile();
+  return company ? isInterState(profile.gstin, company.gstin) : false;
+}
+
+$('#quotationCompany').addEventListener('change', () => renderTotalsBox('quotation'));
+$('#invoiceCompany').addEventListener('change', () => renderTotalsBox('invoice'));
+$('#purchaseCompany').addEventListener('change', () => renderTotalsBox('purchase'));
+
+function renderTotalsBox(kind) {
+  const interState = currentInterState(kind);
+  const totals = computeTotals(draft[kind].items, interState);
+  draft[kind].totals = totals;
+  const box = $('#' + kind + 'TotalsBox');
+  const rows = [];
+  rows.push(`<div class="row"><span>Subtotal</span><span>${fmt(totals.subtotal)}</span></div>`);
+  if (interState) {
+    rows.push(`<div class="row"><span>IGST</span><span>${fmt(totals.igst)}</span></div>`);
+  } else {
+    rows.push(`<div class="row"><span>CGST</span><span>${fmt(totals.cgst)}</span></div>`);
+    rows.push(`<div class="row"><span>SGST</span><span>${fmt(totals.sgst)}</span></div>`);
+  }
+  rows.push(`<div class="row grand"><span>Grand Total</span><span>${fmt(totals.total)}</span></div>`);
+  box.innerHTML = rows.join('');
+}
+
+/* =====================================================================
+   QUOTATIONS
+===================================================================== */
+function renderQuotations() {
+  const tbody = $('#quotationsTbody');
+  const quotations = Store.getQuotations().slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  if (!quotations.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">No quotations yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = quotations.map(q => `
+    <tr>
+      <td>${escapeHtml(q.quotationNo)}</td>
+      <td>${fmtDateShort(q.date)}</td>
+      <td>${escapeHtml(companyName(q.companyId))}</td>
+      <td class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-quotation="${q.id}">Edit</button>
+        <button class="btn btn-secondary btn-sm" data-pdf-quotation="${q.id}">Download PDF</button>
+        <button class="btn btn-danger btn-sm" data-delete-quotation="${q.id}">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function resetQuotationModal() {
+  draft.quotation = { items: [] };
+  $('#quotationId').value = '';
+  $('#quotationDate').value = todayISO();
+  $('#quotationCompany').value = '';
+  $('#quotationShowSubtotal').checked = false;
+  $('#quotationShowTax').checked = false;
+  $('#quotationShowGrandTotal').checked = false;
+  populateProductPicker($('#quotationProductPicker'));
+  renderLineItems('quotation');
+  showQuotationStep('form');
+}
+
+function getQuotationDisplayOptions() {
+  return {
+    showSubtotal: $('#quotationShowSubtotal').checked,
+    showTax: $('#quotationShowTax').checked,
+    showGrandTotal: $('#quotationShowGrandTotal').checked,
+  };
+}
+
+function getQuotationTerms() {
+  const existingId = $('#quotationId').value;
+  if (existingId) {
+    // Editing an already-saved quotation: keep whatever terms were snapshotted at creation time —
+    // never re-pull current config, so later Terms & Conditions edits don't retroactively change it.
+    const existing = Store.getQuotations().find(q => q.id === existingId);
+    return (existing && existing.terms) ? existing.terms : (draft.quotation.terms || []);
+  }
+  return Store.getTermsTemplates().map(t => t.text);
+}
+
+function getQuotationNoForDraft() {
+  const existingId = $('#quotationId').value;
+  if (existingId) {
+    return Store.getQuotations().find(q => q.id === existingId).quotationNo;
+  }
+  return getNextQuotationNo();
+}
+
+function showQuotationStep(step) {
+  const isForm = step === 'form';
+  $('#quotationStepForm').style.display = isForm ? '' : 'none';
+  $('#quotationStepPreview').style.display = isForm ? 'none' : '';
+  $('#quotationStepLabel1').classList.toggle('active', isForm);
+  $('#quotationStepLabel2').classList.toggle('active', !isForm);
+  $('#quotationNextBtn').style.display = isForm ? '' : 'none';
+  $('#quotationEditBtn').style.display = isForm ? 'none' : '';
+  $('#quotationDownloadBtn').style.display = isForm ? 'none' : '';
+  $('#quotationConfirmBtn').style.display = isForm ? 'none' : '';
+}
+
+$('#btnAddQuotation').addEventListener('click', () => {
+  if (!Store.getCompanies().some(c => c.isSalesCompany) || !Store.getProducts().length) {
+    toast('Add at least one product and company first');
+    return;
+  }
+  resetQuotationModal();
+  openModal('quotationModal');
+});
+
+$('#quotationAddLineBtn').addEventListener('click', () => {
+  const productId = $('#quotationProductPicker').value;
+  if (!productId) { toast('Select a product first'); return; }
+  addLineItemToDraft('quotation', productId);
+});
+
+function buildDocDataFromDraft(kind, extra) {
+  const companyId = $('#' + kind + 'Company').value;
+  const company = companiesStoreForKind(kind).find(c => c.id === companyId);
+  const totals = draft[kind].totals || computeTotals(draft[kind].items, currentInterState(kind));
+  const docData = Object.assign({
+    id: $('#' + kind + 'Id').value || undefined,
+    companyId,
+    date: $('#' + kind + 'Date').value,
+    items: draft[kind].items,
+    subtotal: totals.subtotal,
+    cgst: totals.cgst,
+    sgst: totals.sgst,
+    igst: totals.igst,
+    total: totals.total,
+  }, extra || {});
+  return [docData, company];
+}
+
+function renderDocPreview(container, docData, company, docTitle, isInvoice) {
+  const profile = Store.getProfile();
+  const interState = isInterState(profile.gstin, company ? company.gstin : '');
+  const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true }, docData.displayOptions || {});
+  const rowsHtml = docData.items.map((it, idx) => {
+    const taxable = it.qty * it.rate;
+    const tax = taxable * it.gstPercent / 100;
+    const detailsHtml = it.details ? `<div class="line-details">${escapeHtml(it.details)}</div>` : '';
+    return `<tr>
+      <td>${idx + 1}</td><td class="product-col">${escapeHtml(it.name)}${detailsHtml}</td><td>${escapeHtml(it.hsnCode)}</td>
+      <td>${it.qty} ${escapeHtml(it.unit)}</td><td>${fmt(it.rate)}</td>
+      <td>${it.gstPercent}%</td><td>${fmt(tax)}</td><td>${fmt(taxable + tax)}</td>
+    </tr>`;
+  }).join('');
+
+  const taxRowsHtml = !opts.showTax ? '' : (interState
+    ? `<div class="row"><span>IGST</span><span>${fmt(docData.igst)}</span></div>`
+    : `<div class="row"><span>CGST</span><span>${fmt(docData.cgst)}</span></div><div class="row"><span>SGST</span><span>${fmt(docData.sgst)}</span></div>`);
+
+  let bankHtml = '';
+  if (isInvoice) {
+    bankHtml = `
+      <div class="doc-footer-block">
+        <div>
+          <h4 style="margin:0 0 6px;font-size:12px;color:#667085;text-transform:uppercase;">Bank Details</h4>
+          <div>${escapeHtml(profile.bankName || 'Not set')}</div>
+          <div>A/c No: ${escapeHtml(profile.bankAccountNo || '-')}</div>
+          <div>IFSC: ${escapeHtml(profile.bankIFSC || '-')}</div>
+          <div>Branch: ${escapeHtml(profile.bankBranch || '-')}</div>
+        </div>
+        <div class="seal-box">${profile.sealDataUrl ? `<img src="${profile.sealDataUrl}">` : 'Company Seal'}</div>
+      </div>`;
+  }
+
+  container.innerHTML = `
+    <div class="doc-head">
+      <div class="doc-head-left">
+        ${profile.logoDataUrl ? `<img class="doc-logo" src="${profile.logoDataUrl}">` : ''}
+        <div>
+          <div class="biz-title">${escapeHtml(profile.name || 'Your Business Name')}</div>
+          <div>${escapeHtml(profile.address || '')}</div>
+          ${profile.gstin ? `<div>GSTIN: ${escapeHtml(profile.gstin)}</div>` : ''}
+        </div>
+      </div>
+      <div class="doc-head-right">
+        <div class="doc-title">${docTitle}</div>
+        <div>No: ${escapeHtml(docData.quotationNo || docData.invoiceNo || '(will be assigned)')}</div>
+        ${isInvoice ? `<div>Challan: ${escapeHtml(docData.challanNo || '-')}</div>` : ''}
+        <div>Date: ${fmtDateShort(docData.date)}</div>
+      </div>
+    </div>
+    <div class="bill-to">
+      <h4>Bill To</h4>
+      <div>${escapeHtml(company ? company.name : '')}</div>
+      <div>${escapeHtml(company ? company.address || '' : '')}</div>
+      ${company && company.gstin ? `<div>GSTIN: ${escapeHtml(company.gstin)}</div>` : ''}
+    </div>
+    <table>
+      <thead><tr><th>#</th><th class="product-col">Product</th><th>HSN</th><th>Qty</th><th>Rate</th><th>GST%</th><th>Tax</th><th>Total</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <div class="totals-box">
+      ${opts.showSubtotal ? `<div class="row"><span>Subtotal</span><span>${fmt(docData.subtotal)}</span></div>` : ''}
+      ${taxRowsHtml}
+      ${opts.showGrandTotal ? `<div class="row grand"><span>Grand Total</span><span>${fmt(docData.total)}</span></div>` : ''}
+    </div>
+    ${!isInvoice && docData.terms && docData.terms.length ? `
+      <div class="doc-terms">
+        <div class="doc-terms-title">Terms &amp; Conditions</div>
+        <ol>${docData.terms.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ol>
+      </div>` : ''}
+    ${isInvoice ? `<div class="amount-words">Amount in Words: ${amountInWords(docData.total)}</div>` : ''}
+    ${bankHtml}
+    <div class="doc-address-footer">${escapeHtml(profile.name || '')} — ${escapeHtml(profile.address || '')}</div>
+  `;
+}
+
+$('#quotationNextBtn').addEventListener('click', () => {
+  if (!$('#quotationCompany').value) { toast('Select a company'); return; }
+  if (!draft.quotation.items.length) { toast('Add at least one line item'); return; }
+  const [docData, company] = buildDocDataFromDraft('quotation', {
+    quotationNo: getQuotationNoForDraft(),
+    displayOptions: getQuotationDisplayOptions(),
+    terms: getQuotationTerms(),
+  });
+  renderDocPreview($('#quotationPreviewContent'), docData, company, 'QUOTATION', false);
+  showQuotationStep('preview');
+});
+
+$('#quotationEditBtn').addEventListener('click', () => showQuotationStep('form'));
+
+function getQuotationDraftDoc() {
+  return buildDocDataFromDraft('quotation', {
+    quotationNo: getQuotationNoForDraft(),
+    displayOptions: getQuotationDisplayOptions(),
+    terms: getQuotationTerms(),
+  });
+}
+
+$('#quotationDownloadBtn').addEventListener('click', () => {
+  const [docData, company] = getQuotationDraftDoc();
+  const doc = buildQuotationPdf(docData, company, Store.getProfile());
+  doc.save(`${docData.quotationNo.replace(/\//g, '-')}.pdf`);
+});
+
+$('#quotationConfirmBtn').addEventListener('click', () => {
+  const [docData] = getQuotationDraftDoc();
+  Store.saveQuotation(docData);
+  closeModal('quotationModal');
+  renderQuotations();
+  toast('Quotation saved');
+});
+
+document.addEventListener('click', (e) => {
+  const editId = e.target.getAttribute && e.target.getAttribute('data-edit-quotation');
+  if (editId) {
+    const q = Store.getQuotations().find(x => x.id === editId);
+    draft.quotation = { items: JSON.parse(JSON.stringify(q.items)), terms: JSON.parse(JSON.stringify(q.terms || [])) };
+    $('#quotationId').value = q.id;
+    $('#quotationDate').value = q.date;
+    populateProductPicker($('#quotationProductPicker'));
+    $('#quotationCompany').value = q.companyId;
+    const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true }, q.displayOptions || {});
+    $('#quotationShowSubtotal').checked = opts.showSubtotal;
+    $('#quotationShowTax').checked = opts.showTax;
+    $('#quotationShowGrandTotal').checked = opts.showGrandTotal;
+    renderLineItems('quotation');
+    showQuotationStep('form');
+    openModal('quotationModal');
+  }
+  const pdfId = e.target.getAttribute && e.target.getAttribute('data-pdf-quotation');
+  if (pdfId) {
+    const q = Store.getQuotations().find(x => x.id === pdfId);
+    const company = Store.getCompanies().find(c => c.id === q.companyId);
+    const doc = buildQuotationPdf(q, company, Store.getProfile());
+    doc.save(`${q.quotationNo.replace(/\//g, '-')}.pdf`);
+  }
+  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-quotation');
+  if (delId) {
+    if (confirm('Delete this quotation?')) { Store.deleteQuotation(delId); renderQuotations(); toast('Quotation deleted'); }
+  }
+});
+
+/* =====================================================================
+   INVOICES
+===================================================================== */
+function paymentStatusBadge(inv) {
+  if (!inv.payment || !inv.payment.received) return `<span class="badge badge-muted">Unpaid</span>`;
+  if (inv.payment.shortfallType === 'tds' && inv.payment.shortfallAmount > 0.009) {
+    return `<span class="badge badge-success">TDS Deducted</span>`;
+  }
+  if (inv.payment.shortfallAmount > 0.009) {
+    return `<span class="badge badge-warning">Partially Paid</span>`;
+  }
+  return `<span class="badge badge-success">Paid</span>`;
+}
+
+function renderInvoices() {
+  const tbody = $('#invoicesTbody');
+  const invoices = Store.getInvoices().slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  if (!invoices.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">No invoices yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = invoices.map(inv => `
+    <tr>
+      <td>${escapeHtml(inv.invoiceNo)}</td>
+      <td>${escapeHtml(inv.challanNo || '-')}</td>
+      <td>${fmtDateShort(inv.date)}</td>
+      <td>${escapeHtml(companyName(inv.companyId))}</td>
+      <td>${fmt(inv.subtotal)}</td>
+      <td>${fmt((Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0))}</td>
+      <td>${fmt(inv.total)}</td>
+      <td>${paymentStatusBadge(inv)}</td>
+      <td class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-invoice="${inv.id}">Edit</button>
+        <button class="btn btn-secondary btn-sm" data-pdf-invoice="${inv.id}">Download PDF</button>
+        <button class="btn btn-danger btn-sm" data-delete-invoice="${inv.id}">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function resetInvoiceModal() {
+  draft.invoice = { items: [] };
+  $('#invoiceId').value = '';
+  $('#invoiceDate').value = todayISO();
+  $('#invoiceCompany').value = '';
+  $('#invoiceNo').value = getNextInvoiceNo();
+  $('#invoiceChallanNo').value = getNextChallanNo();
+  populateProductPicker($('#invoiceProductPicker'));
+  renderLineItems('invoice');
+  showInvoiceStep('form');
+}
+
+function showInvoiceStep(step) {
+  const isForm = step === 'form';
+  $('#invoiceStepForm').style.display = isForm ? '' : 'none';
+  $('#invoiceStepPreview').style.display = isForm ? 'none' : '';
+  $('#invoiceStepLabel1').classList.toggle('active', isForm);
+  $('#invoiceStepLabel2').classList.toggle('active', !isForm);
+  $('#invoiceNextBtn').style.display = isForm ? '' : 'none';
+  $('#invoiceEditBtn').style.display = isForm ? 'none' : '';
+  $('#invoiceDownloadBtn').style.display = isForm ? 'none' : '';
+  $('#invoiceConfirmBtn').style.display = isForm ? 'none' : '';
+}
+
+$('#btnAddInvoice').addEventListener('click', () => {
+  if (!Store.getCompanies().some(c => c.isSalesCompany) || !Store.getProducts().length) {
+    toast('Add at least one product and company first');
+    return;
+  }
+  resetInvoiceModal();
+  openModal('invoiceModal');
+});
+
+$('#invoiceAddLineBtn').addEventListener('click', () => {
+  const productId = $('#invoiceProductPicker').value;
+  if (!productId) { toast('Select a product first'); return; }
+  addLineItemToDraft('invoice', productId);
+});
+
+function getInvoiceDraftDoc() {
+  return buildDocDataFromDraft('invoice', {
+    invoiceNo: $('#invoiceNo').value.trim(),
+    challanNo: $('#invoiceChallanNo').value.trim(),
+  });
+}
+
+$('#invoiceNextBtn').addEventListener('click', () => {
+  if (!$('#invoiceCompany').value) { toast('Select a company'); return; }
+  if (!draft.invoice.items.length) { toast('Add at least one line item'); return; }
+  if (!$('#invoiceNo').value.trim()) { toast('Invoice No is required'); return; }
+  const [docData, company] = getInvoiceDraftDoc();
+  docData.amountInWords = amountInWords(docData.total);
+  renderDocPreview($('#invoicePreviewContent'), docData, company, 'TAX INVOICE', true);
+  showInvoiceStep('preview');
+});
+
+$('#invoiceEditBtn').addEventListener('click', () => showInvoiceStep('form'));
+
+$('#invoiceDownloadBtn').addEventListener('click', () => {
+  const [docData, company] = getInvoiceDraftDoc();
+  docData.amountInWords = amountInWords(docData.total);
+  const doc = buildInvoicePdf(docData, company, Store.getProfile());
+  doc.save(`${docData.invoiceNo.replace(/\//g, '-')}.pdf`);
+});
+
+$('#invoiceConfirmBtn').addEventListener('click', () => {
+  const isNew = !$('#invoiceId').value;
+  const [docData] = getInvoiceDraftDoc();
+  docData.amountInWords = amountInWords(docData.total);
+  if (isNew) {
+    docData.payment = { received: false, amountReceived: null, paymentDate: null, shortfallType: null, shortfallAmount: 0 };
+  } else {
+    const existing = Store.getInvoices().find(i => i.id === docData.id);
+    docData.payment = existing.payment;
+  }
+  Store.saveInvoice(docData);
+  closeModal('invoiceModal');
+  renderInvoices();
+  renderPayments();
+  toast('Invoice saved');
+});
+
+document.addEventListener('click', (e) => {
+  const editId = e.target.getAttribute && e.target.getAttribute('data-edit-invoice');
+  if (editId) {
+    const inv = Store.getInvoices().find(x => x.id === editId);
+    draft.invoice = { items: JSON.parse(JSON.stringify(inv.items)) };
+    $('#invoiceId').value = inv.id;
+    $('#invoiceDate').value = inv.date;
+    $('#invoiceNo').value = inv.invoiceNo;
+    $('#invoiceChallanNo').value = inv.challanNo || '';
+    populateProductPicker($('#invoiceProductPicker'));
+    $('#invoiceCompany').value = inv.companyId;
+    renderLineItems('invoice');
+    showInvoiceStep('form');
+    openModal('invoiceModal');
+  }
+  const pdfId = e.target.getAttribute && e.target.getAttribute('data-pdf-invoice');
+  if (pdfId) {
+    const inv = Store.getInvoices().find(x => x.id === pdfId);
+    const company = Store.getCompanies().find(c => c.id === inv.companyId);
+    const doc = buildInvoicePdf(inv, company, Store.getProfile());
+    doc.save(`${inv.invoiceNo.replace(/\//g, '-')}.pdf`);
+  }
+  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-invoice');
+  if (delId) {
+    if (confirm('Delete this invoice?')) { Store.deleteInvoice(delId); renderInvoices(); renderPayments(); toast('Invoice deleted'); }
+  }
+});
+
+/* =====================================================================
+   PURCHASES
+===================================================================== */
+function purchasePaymentBadge(p) {
+  return p.paymentDone ? '<span class="badge badge-success">Paid</span>' : '<span class="badge badge-muted">Unpaid</span>';
+}
+
+function renderPurchases() {
+  const tbody = $('#purchasesTbody');
+  const purchases = Store.getPurchases().slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  if (!purchases.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">No purchases yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = purchases.map(p => `
+    <tr>
+      <td>${escapeHtml(p.purchaseNo)}</td>
+      <td>${fmtDateShort(p.date)}</td>
+      <td>${escapeHtml(companyName(p.companyId))}</td>
+      <td>${fmt(p.subtotal)}</td>
+      <td>${fmt((Number(p.cgst) || 0) + (Number(p.sgst) || 0) + (Number(p.igst) || 0))}</td>
+      <td>${fmt(p.total)}</td>
+      <td>${purchasePaymentBadge(p)}</td>
+      <td class="truncate-cell" title="${escapeHtml(p.paymentNote || '')}">${escapeHtml(p.paymentNote || '-')}</td>
+      <td class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-purchase="${p.id}">Edit</button>
+        <button class="btn btn-danger btn-sm" data-delete-purchase="${p.id}">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+let expandedPurchaseCompanies = new Set();
+
+function purchaseRow(p) {
+  return `
+    <tr>
+      <td>${escapeHtml(p.purchaseNo)}</td>
+      <td>${fmtDateShort(p.date)}</td>
+      <td>${fmt(p.subtotal)}</td>
+      <td>${fmt((Number(p.cgst) || 0) + (Number(p.sgst) || 0) + (Number(p.igst) || 0))}</td>
+      <td>${fmt(p.total)}</td>
+      <td>${purchasePaymentBadge(p)}</td>
+    </tr>`;
+}
+
+function renderPurchasesByCompany() {
+  const container = $('#purchasesByCompany');
+  const purchases = Store.getPurchases();
+  if (!purchases.length) {
+    container.innerHTML = `<div class="card" style="padding:30px; text-align:center; color:var(--text-muted);">No purchases yet.</div>`;
+    return;
+  }
+  const companies = Store.getCompanies().filter(c => c.isPurchaseCompany);
+  const groups = companies.map(c => ({
+    company: c,
+    purchases: purchases.filter(p => p.companyId === c.id).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
+  })).filter(g => g.purchases.length > 0);
+
+  container.innerHTML = groups.map(g => {
+    const total = g.purchases.reduce((sum, p) => sum + (Number(p.total) || 0), 0);
+    const expanded = expandedPurchaseCompanies.has(g.company.id);
+    const meta = `${g.purchases.length} purchase${g.purchases.length === 1 ? '' : 's'} · Total ${fmt(total)}`;
+    return `
+    <div class="card accordion-item">
+      <div class="accordion-header ${expanded ? 'expanded' : ''}" data-toggle-purchase-company="${g.company.id}">
+        <span class="accordion-caret">&#9656;</span>
+        <span class="accordion-title">${escapeHtml(g.company.name)}</span>
+        <span class="accordion-meta">${meta}</span>
+      </div>
+      <div class="accordion-body" style="display:${expanded ? '' : 'none'};">
+        <table>
+          <thead>
+            <tr><th>Purchase No</th><th>Date</th><th>Total</th><th>GST</th><th>Purchase Total</th><th>Payment Status</th></tr>
+          </thead>
+          <tbody>${g.purchases.map(purchaseRow).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+document.addEventListener('click', (e) => {
+  const toggleHeader = e.target.closest && e.target.closest('[data-toggle-purchase-company]');
+  if (toggleHeader) {
+    const cid = toggleHeader.getAttribute('data-toggle-purchase-company');
+    if (expandedPurchaseCompanies.has(cid)) expandedPurchaseCompanies.delete(cid); else expandedPurchaseCompanies.add(cid);
+    renderPurchasesByCompany();
+  }
+});
+
+function resetPurchaseModal() {
+  draft.purchase = { items: [] };
+  $('#purchaseModalTitle').textContent = 'Add Purchase';
+  $('#purchaseId').value = '';
+  $('#purchaseDate').value = todayISO();
+  populateCompanyDropdowns();
+  $('#purchaseCompany').value = '';
+  $('#purchaseNo').value = getNextPurchaseNo();
+  $('#purchasePaymentDone').checked = false;
+  $('#purchasePaymentNote').value = '';
+  populateProductPicker($('#purchaseProductPicker'));
+  renderLineItems('purchase');
+}
+
+$('#btnAddPurchase').addEventListener('click', () => {
+  if (!Store.getCompanies().some(c => c.isPurchaseCompany) || !Store.getProducts().length) {
+    toast('Add at least one product and purchase company first');
+    return;
+  }
+  resetPurchaseModal();
+  openModal('purchaseModal');
+});
+
+$('#purchaseAddLineBtn').addEventListener('click', () => {
+  const productId = $('#purchaseProductPicker').value;
+  if (!productId) { toast('Select a product first'); return; }
+  addLineItemToDraft('purchase', productId);
+});
+
+$('#savePurchaseBtn').addEventListener('click', () => {
+  if (!$('#purchaseCompany').value) { toast('Select a purchase company'); return; }
+  if (!draft.purchase.items.length) { toast('Add at least one line item'); return; }
+  if (!$('#purchaseNo').value.trim()) { toast('Purchase No is required'); return; }
+  const [docData] = buildDocDataFromDraft('purchase', {
+    purchaseNo: $('#purchaseNo').value.trim(),
+    paymentDone: $('#purchasePaymentDone').checked,
+    paymentNote: $('#purchasePaymentNote').value.trim(),
+  });
+  Store.savePurchase(docData);
+  closeModal('purchaseModal');
+  renderPurchases();
+  renderPurchasesByCompany();
+  toast('Purchase saved');
+});
+
+document.addEventListener('click', (e) => {
+  const editId = e.target.getAttribute && e.target.getAttribute('data-edit-purchase');
+  if (editId) {
+    const p = Store.getPurchases().find(x => x.id === editId);
+    draft.purchase = { items: JSON.parse(JSON.stringify(p.items)) };
+    $('#purchaseModalTitle').textContent = 'Edit Purchase';
+    $('#purchaseId').value = p.id;
+    $('#purchaseDate').value = p.date;
+    $('#purchaseNo').value = p.purchaseNo;
+    $('#purchasePaymentDone').checked = !!p.paymentDone;
+    $('#purchasePaymentNote').value = p.paymentNote || '';
+    populateProductPicker($('#purchaseProductPicker'));
+    populateCompanyDropdowns();
+    $('#purchaseCompany').value = p.companyId;
+    renderLineItems('purchase');
+    openModal('purchaseModal');
+  }
+  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-purchase');
+  if (delId) {
+    if (confirm('Delete this purchase?')) { Store.deletePurchase(delId); renderPurchases(); renderPurchasesByCompany(); toast('Purchase deleted'); }
+  }
+});
+
+/* =====================================================================
+   CASH / MANUAL EXPENSES
+===================================================================== */
+function renderExpenses() {
+  const tbody = $('#expensesTbody');
+  const expenses = Store.getExpenses().slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+  if (!expenses.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">No expenses recorded yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = expenses.map(e => `
+    <tr>
+      <td>${fmtDateShort(e.date)}</td>
+      <td>${escapeHtml(e.category)}</td>
+      <td>${escapeHtml(e.description || '')}</td>
+      <td>${fmt(e.amount)}</td>
+      <td class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-expense="${e.id}">Edit</button>
+        <button class="btn btn-danger btn-sm" data-delete-expense="${e.id}">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function openExpenseModal(expense) {
+  $('#expenseModalTitle').textContent = expense ? 'Edit Expense' : 'Add Expense';
+  $('#expenseId').value = expense ? expense.id : '';
+  $('#expenseDate').value = expense ? expense.date : todayISO();
+  populateExpenseCategoryOptions(expense ? expense.category : undefined);
+  $('#expenseDescription').value = expense ? (expense.description || '') : '';
+  $('#expenseAmount').value = expense ? expense.amount : '';
+  openModal('expenseModal');
+}
+
+$('#btnAddExpense').addEventListener('click', () => openExpenseModal(null));
+
+$('#saveExpenseBtn').addEventListener('click', () => {
+  const form = $('#expenseForm');
+  if (!form.reportValidity()) return;
+  const expense = {
+    id: $('#expenseId').value || undefined,
+    date: $('#expenseDate').value,
+    category: $('#expenseCategory').value.trim(),
+    description: $('#expenseDescription').value.trim(),
+    amount: Number($('#expenseAmount').value),
+  };
+  Store.saveExpense(expense);
+  closeModal('expenseModal');
+  renderExpenses();
+  toast('Expense saved');
+});
+
+document.addEventListener('click', (e) => {
+  const editId = e.target.getAttribute && e.target.getAttribute('data-edit-expense');
+  if (editId) openExpenseModal(Store.getExpenses().find(x => x.id === editId));
+  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-expense');
+  if (delId) {
+    if (confirm('Delete this expense?')) { Store.deleteExpense(delId); renderExpenses(); toast('Expense deleted'); }
+  }
+});
+
+/* =====================================================================
+   DEFAULT CONFIGURATIONS (Units, GST Rates, Expense Categories, Terms & Conditions)
+   These are pick-lists only — every consumer (Products, line items, Expenses, Quotations)
+   copies the selected value by plain value at the moment it's chosen/saved, so editing or
+   deleting a config row here never retroactively changes any previously-saved record.
+===================================================================== */
+const CONFIG_TYPES = {
+  unit: {
+    getAll: () => Store.getUnits(), save: (r) => Store.saveUnit(r), del: (id) => Store.deleteUnit(id),
+    field: 'name', fieldKind: 'text', label: 'Unit Name', tbody: '#unitsConfigTbody',
+  },
+  gstRate: {
+    getAll: () => Store.getGstRates(), save: (r) => Store.saveGstRate(r), del: (id) => Store.deleteGstRate(id),
+    field: 'value', fieldKind: 'number', label: 'GST Rate (%)', tbody: '#gstRatesConfigTbody',
+  },
+  expenseCategory: {
+    getAll: () => Store.getExpenseCategories(), save: (r) => Store.saveExpenseCategory(r), del: (id) => Store.deleteExpenseCategory(id),
+    field: 'name', fieldKind: 'text', label: 'Category Name', tbody: '#expenseCategoriesConfigTbody',
+  },
+  term: {
+    getAll: () => Store.getTermsTemplates(), save: (r) => Store.saveTermsTemplate(r), del: (id) => Store.deleteTermsTemplate(id),
+    field: 'text', fieldKind: 'textarea', label: 'Clause Text', tbody: '#termsConfigTbody',
+  },
+};
+
+function renderConfigTable(type) {
+  const cfg = CONFIG_TYPES[type];
+  const tbody = $(cfg.tbody);
+  const rows = cfg.getAll();
+  if (!rows.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="2">No entries yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(String(r[cfg.field]))}${cfg.field === 'value' ? '%' : ''}</td>
+      <td class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-config-type="${type}" data-edit-config-id="${r.id}">Edit</button>
+        <button class="btn btn-danger btn-sm" data-delete-config-type="${type}" data-delete-config-id="${r.id}">Delete</button>
+      </td>
+    </tr>`).join('');
+}
+function renderUnitsConfig() { renderConfigTable('unit'); }
+function renderGstRatesConfig() { renderConfigTable('gstRate'); }
+function renderExpenseCategoriesConfig() { renderConfigTable('expenseCategory'); }
+function renderTermsConfig() { renderConfigTable('term'); }
+function renderAllConfigTables() { renderUnitsConfig(); renderGstRatesConfig(); renderExpenseCategoriesConfig(); renderTermsConfig(); }
+
+function openConfigModal(type, id) {
+  const cfg = CONFIG_TYPES[type];
+  const item = id ? cfg.getAll().find(r => r.id === id) : null;
+  $('#configItemModalTitle').textContent = (item ? 'Edit ' : 'Add ') + cfg.label;
+  $('#configItemType').value = type;
+  $('#configItemId').value = item ? item.id : '';
+  $('#configItemTextFieldWrap').style.display = cfg.fieldKind === 'text' ? '' : 'none';
+  $('#configItemNumberFieldWrap').style.display = cfg.fieldKind === 'number' ? '' : 'none';
+  $('#configItemTextareaFieldWrap').style.display = cfg.fieldKind === 'textarea' ? '' : 'none';
+  if (cfg.fieldKind === 'text') {
+    $('#configItemFieldLabel').textContent = cfg.label;
+    $('#configItemTextValue').value = item ? item[cfg.field] : '';
+  }
+  if (cfg.fieldKind === 'number') {
+    $('#configItemNumberValue').value = item ? item[cfg.field] : '';
+  }
+  if (cfg.fieldKind === 'textarea') {
+    $('#configItemTextareaValue').value = item ? item[cfg.field] : '';
+  }
+  openModal('configItemModal');
+}
+
+function refreshConfigConsumers(type) {
+  if (type === 'unit') populateUnitOptions();
+  if (type === 'gstRate') populateGstRateOptions($('#productGst'));
+  if (type === 'expenseCategory') populateExpenseCategoryOptions();
+}
+
+$('#saveConfigItemBtn').addEventListener('click', () => {
+  const type = $('#configItemType').value;
+  const cfg = CONFIG_TYPES[type];
+  const value = cfg.fieldKind === 'text' ? $('#configItemTextValue').value.trim()
+    : cfg.fieldKind === 'number' ? Number($('#configItemNumberValue').value)
+    : $('#configItemTextareaValue').value.trim();
+  if (cfg.fieldKind !== 'number' && !value) { toast('Value is required'); return; }
+  if (cfg.fieldKind === 'number' && !($('#configItemNumberValue').value)) { toast('Value is required'); return; }
+  const record = { id: $('#configItemId').value || undefined, [cfg.field]: value };
+  cfg.save(record);
+  closeModal('configItemModal');
+  renderConfigTable(type);
+  refreshConfigConsumers(type);
+  toast('Saved');
+});
+
+document.addEventListener('click', (e) => {
+  const addType = e.target.getAttribute && e.target.getAttribute('data-add-config');
+  if (addType) openConfigModal(addType, null);
+  const editType = e.target.getAttribute && e.target.getAttribute('data-edit-config-type');
+  if (editType) openConfigModal(editType, e.target.getAttribute('data-edit-config-id'));
+  const delType = e.target.getAttribute && e.target.getAttribute('data-delete-config-type');
+  if (delType) {
+    const delId = e.target.getAttribute('data-delete-config-id');
+    if (confirm('Delete this entry? Existing records that used it will keep their own saved value.')) {
+      CONFIG_TYPES[delType].del(delId);
+      renderConfigTable(delType);
+      refreshConfigConsumers(delType);
+      toast('Deleted');
+    }
+  }
+});
+
+function populateUnitOptions(selectedValue) {
+  const el = $('#productUnit');
+  let names = Store.getUnits().map(u => u.name);
+  if (selectedValue && !names.includes(selectedValue)) names = names.concat([selectedValue]);
+  el.innerHTML = names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+  if (selectedValue) el.value = selectedValue;
+}
+
+function populateGstRateOptions(selectEl, selectedValue) {
+  let values = Store.getGstRates().map(r => r.value);
+  if (selectedValue !== undefined && selectedValue !== null && selectedValue !== '' && !values.includes(Number(selectedValue))) {
+    values = values.concat([Number(selectedValue)]);
+  }
+  values.sort((a, b) => a - b);
+  selectEl.innerHTML = values.map(v => `<option value="${v}">${v}%</option>`).join('');
+  if (selectedValue !== undefined && selectedValue !== null && selectedValue !== '') selectEl.value = String(Number(selectedValue));
+}
+
+function populateExpenseCategoryOptions(selectedValue) {
+  const el = $('#expenseCategory');
+  let names = Store.getExpenseCategories().map(c => c.name);
+  if (selectedValue && !names.includes(selectedValue)) names = names.concat([selectedValue]);
+  el.innerHTML = names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+  if (selectedValue) el.value = selectedValue;
+}
+
+/* =====================================================================
+   PAYMENTS (grouped by company, collapsible — default collapsed)
+===================================================================== */
+let expandedPaymentCompanies = new Set();
+
+function paymentInvoiceRow(inv) {
+  const pay = inv.payment || {};
+  return `
+    <tr>
+      <td>${escapeHtml(inv.invoiceNo)}</td>
+      <td>${fmt(inv.subtotal)}</td>
+      <td>${fmt((Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0))}</td>
+      <td>${fmt(inv.total)}</td>
+      <td>${pay.received ? fmt(pay.amountReceived) : '-'}</td>
+      <td>${pay.received && pay.shortfallType === 'pending' && pay.shortfallAmount > 0.009 ? fmt(pay.shortfallAmount) : '-'}</td>
+      <td>${pay.received && pay.shortfallType === 'tds' && pay.shortfallAmount > 0.009 ? fmt(pay.shortfallAmount) : '-'}</td>
+      <td>${pay.received ? fmtDateShort(pay.paymentDate) : '-'}</td>
+      <td>${expectedPaymentDate(inv)}</td>
+      <td>${paymentStatusBadge(inv)}</td>
+      <td class="actions-cell">
+        <button class="btn btn-success btn-sm" data-record-payment="${inv.id}">${pay.received ? 'Edit Payment' : 'Record Payment'}</button>
+      </td>
+    </tr>`;
+}
+
+function renderPayments() {
+  const container = $('#paymentsByCompany');
+  const invoices = Store.getInvoices();
+  if (!invoices.length) {
+    container.innerHTML = `<div class="card" style="padding:30px; text-align:center; color:var(--text-muted);">No invoices yet.</div>`;
+    return;
+  }
+  const companies = Store.getCompanies();
+  const groups = companies.map(c => ({
+    company: c,
+    invoices: invoices.filter(i => i.companyId === c.id).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
+  })).filter(g => g.invoices.length > 0);
+
+  container.innerHTML = groups.map(g => {
+    const outstanding = g.invoices.reduce((sum, inv) => sum + Math.max(invoiceBalance(inv), 0), 0);
+    const expanded = expandedPaymentCompanies.has(g.company.id);
+    const meta = `${g.invoices.length} invoice${g.invoices.length === 1 ? '' : 's'} · Outstanding ${fmt(outstanding)}`;
+    return `
+    <div class="card accordion-item">
+      <div class="accordion-header ${expanded ? 'expanded' : ''}" data-toggle-company="${g.company.id}">
+        <span class="accordion-caret">&#9656;</span>
+        <span class="accordion-title">${escapeHtml(g.company.name)}</span>
+        <span class="accordion-meta">${meta}</span>
+      </div>
+      <div class="accordion-body" style="display:${expanded ? '' : 'none'};">
+        <table>
+          <thead>
+            <tr><th>Invoice No</th><th>Total</th><th>GST</th><th>Invoice Total</th><th>Amount Received</th><th>Pending</th><th>TDS</th><th>Payment Date</th><th>Expected Payment</th><th>Status</th><th>Actions</th></tr>
+          </thead>
+          <tbody>${g.invoices.map(paymentInvoiceRow).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+document.addEventListener('click', (e) => {
+  const invId = e.target.getAttribute && e.target.getAttribute('data-record-payment');
+  if (invId) openPaymentModal(invId);
+  const toggleHeader = e.target.closest && e.target.closest('[data-toggle-company]');
+  if (toggleHeader) {
+    const cid = toggleHeader.getAttribute('data-toggle-company');
+    if (expandedPaymentCompanies.has(cid)) expandedPaymentCompanies.delete(cid); else expandedPaymentCompanies.add(cid);
+    renderPayments();
+  }
+});
+
+function openPaymentModal(invoiceId) {
+  const inv = Store.getInvoices().find(i => i.id === invoiceId);
+  $('#paymentInvoiceId').value = inv.id;
+  $('#paymentInvoiceTotal').value = fmt(inv.total);
+  const pay = inv.payment || {};
+  $('#paymentAmountReceived').value = pay.received ? pay.amountReceived : inv.total;
+  $('#paymentDate').value = pay.received && pay.paymentDate ? pay.paymentDate : todayISO();
+  $('#paymentShortfallType').value = pay.shortfallType || 'pending';
+  updateShortfallVisibility(inv.total);
+  openModal('paymentModal');
+}
+
+function updateShortfallVisibility(invoiceTotal) {
+  const received = Number($('#paymentAmountReceived').value) || 0;
+  const shortfall = Number(invoiceTotal) - received;
+  const wrap = $('#paymentShortfallWrap');
+  const hint = $('#paymentShortfallHint');
+  if (shortfall > 0.009) {
+    wrap.style.display = '';
+    hint.textContent = `Amount received is less than invoice total by ${fmt(shortfall)}. Please classify the shortfall.`;
+  } else if (shortfall < -0.009) {
+    wrap.style.display = 'none';
+    hint.textContent = `Amount received exceeds invoice total by ${fmt(-shortfall)}.`;
+  } else {
+    wrap.style.display = 'none';
+    hint.textContent = '';
+  }
+}
+
+$('#paymentAmountReceived').addEventListener('input', () => {
+  const total = Number(String($('#paymentInvoiceTotal').value).replace(/,/g, ''));
+  updateShortfallVisibility(total);
+});
+
+$('#savePaymentBtn').addEventListener('click', () => {
+  const invoiceId = $('#paymentInvoiceId').value;
+  const inv = Store.getInvoices().find(i => i.id === invoiceId);
+  const amountReceived = Number($('#paymentAmountReceived').value);
+  const paymentDate = $('#paymentDate').value;
+  if (!paymentDate || isNaN(amountReceived)) { toast('Amount received and payment date are required'); return; }
+  const shortfall = inv.total - amountReceived;
+  const payment = {
+    received: true,
+    amountReceived,
+    paymentDate,
+    shortfallType: shortfall > 0.009 ? $('#paymentShortfallType').value : null,
+    shortfallAmount: shortfall > 0.009 ? shortfall : 0,
+  };
+  inv.payment = payment;
+  Store.saveInvoice(inv);
+  closeModal('paymentModal');
+  renderInvoices();
+  renderPayments();
+  toast('Payment recorded');
+});
+
+/* =====================================================================
+   SUMMARY (outstanding by company + sales over time)
+===================================================================== */
+function computeCompanyOutstanding() {
+  const companies = Store.getCompanies();
+  const invoices = Store.getInvoices();
+  return companies.map(c => {
+    const invs = invoices.filter(i => i.companyId === c.id);
+    let owed = 0, gstOwed = 0, subtotalOwed = 0, unpaidCount = 0, oldestUnpaidDate = null;
+    invs.forEach(inv => {
+      const bal = invoiceBalance(inv);
+      if (bal > 0.009) {
+        owed += bal;
+        gstOwed += (Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0);
+        subtotalOwed += Number(inv.subtotal) || 0;
+        unpaidCount++;
+        if (!oldestUnpaidDate || new Date(inv.date) < new Date(oldestUnpaidDate)) oldestUnpaidDate = inv.date;
+      }
+    });
+    const expectedDate = oldestUnpaidDate ? addDays(oldestUnpaidDate, c.paymentTermsDays) : null;
+    return { company: c, invoiceCount: invs.length, unpaidCount, owed, gstOwed, subtotalOwed, expectedDate };
+  }).filter(r => r.invoiceCount > 0);
+}
+
+function renderSummaryOutstanding() {
+  const tbody = $('#summaryOutstandingTbody');
+  const rows = computeCompanyOutstanding();
+  if (!rows.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No invoices yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.company.name)}</td>
+      <td>${r.unpaidCount}</td>
+      <td>${r.subtotalOwed > 0.009 ? fmt(r.subtotalOwed) : '-'}</td>
+      <td>${r.gstOwed > 0.009 ? fmt(r.gstOwed) : '-'}</td>
+      <td>${r.owed > 0.009 ? fmt(r.owed) : '-'}</td>
+      <td>${r.expectedDate ? fmtDateShort(r.expectedDate) : '-'}</td>
+    </tr>
+  `).join('');
+}
+
+let summaryPeriodMode = 'annual';
+
+function computeSalesByPeriod(mode) {
+  const invoices = Store.getInvoices();
+  const map = new Map();
+  invoices.forEach(inv => {
+    const key = mode === 'annual' ? currentFinancialYear(new Date(inv.date)) : inv.date.slice(0, 7);
+    if (!map.has(key)) map.set(key, { sales: 0, received: 0, tds: 0 });
+    const row = map.get(key);
+    row.sales += Number(inv.total) || 0;
+    row.received += inv.payment && inv.payment.received ? Number(inv.payment.amountReceived) || 0 : 0;
+    row.tds += inv.payment && inv.payment.received && inv.payment.shortfallType === 'tds' ? Number(inv.payment.shortfallAmount) || 0 : 0;
+  });
+  return Array.from(map.entries())
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([key, v]) => ({
+      period: mode === 'annual' ? `FY ${key}` : formatMonthLabel(key),
+      sales: v.sales,
+      received: v.received,
+      tds: v.tds,
+      pending: v.sales - v.received - v.tds,
+    }));
+}
+
+function formatMonthLabel(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+}
+
+function renderSummarySales() {
+  const tbody = $('#summarySalesTbody');
+  const rows = computeSalesByPeriod(summaryPeriodMode);
+  if (!rows.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">No invoices yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.period)}</td>
+      <td>${fmt(r.sales)}</td>
+      <td>${fmt(r.received)}</td>
+      <td>${fmt(r.tds)}</td>
+      <td>${fmt(r.pending)}</td>
+    </tr>
+  `).join('');
+}
+
+$('#summaryAnnualBtn').addEventListener('click', () => {
+  summaryPeriodMode = 'annual';
+  $('#summaryAnnualBtn').classList.add('active');
+  $('#summaryMonthlyBtn').classList.remove('active');
+  renderSummarySales();
+});
+$('#summaryMonthlyBtn').addEventListener('click', () => {
+  summaryPeriodMode = 'monthly';
+  $('#summaryMonthlyBtn').classList.add('active');
+  $('#summaryAnnualBtn').classList.remove('active');
+  renderSummarySales();
+});
+
+function renderSummary() {
+  renderSummaryOutstanding();
+  renderSummarySales();
+}
+
+/* =====================================================================
+   PROFIT & LOSS
+===================================================================== */
+function computeProfitLossByPeriod(mode) {
+  const map = new Map();
+  function ensure(key) {
+    if (!map.has(key)) map.set(key, { sales: 0, purchases: 0, expenses: 0, tds: 0 });
+    return map.get(key);
+  }
+  const keyFor = (dateStr) => mode === 'annual' ? currentFinancialYear(new Date(dateStr)) : dateStr.slice(0, 7);
+  Store.getInvoices().forEach(inv => {
+    const row = ensure(keyFor(inv.date));
+    row.sales += Number(inv.subtotal) || 0;
+    row.tds += inv.payment && inv.payment.received && inv.payment.shortfallType === 'tds' ? Number(inv.payment.shortfallAmount) || 0 : 0;
+  });
+  Store.getPurchases().forEach(p => { ensure(keyFor(p.date)).purchases += Number(p.subtotal) || 0; });
+  Store.getExpenses().forEach(e => { ensure(keyFor(e.date)).expenses += Number(e.amount) || 0; });
+  return Array.from(map.entries())
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([key, v]) => ({
+      period: mode === 'annual' ? `FY ${key}` : formatMonthLabel(key),
+      ...v,
+      profit: v.sales - v.purchases - v.expenses,
+    }));
+}
+
+let pnlPeriodMode = 'annual';
+
+function renderProfitLoss() {
+  const rows = computeProfitLossByPeriod(pnlPeriodMode);
+  const totals = rows.reduce((acc, r) => ({
+    sales: acc.sales + r.sales,
+    purchases: acc.purchases + r.purchases,
+    expenses: acc.expenses + r.expenses,
+    profit: acc.profit + r.profit,
+    tds: acc.tds + r.tds,
+  }), { sales: 0, purchases: 0, expenses: 0, profit: 0, tds: 0 });
+
+  $('#pnlStatCards').innerHTML = `
+    <div class="stat-card"><div class="label">Total Sales</div><div class="value">${fmt(totals.sales)}</div></div>
+    <div class="stat-card"><div class="label">Total Purchases</div><div class="value">${fmt(totals.purchases)}</div></div>
+    <div class="stat-card"><div class="label">Total Expenses</div><div class="value">${fmt(totals.expenses)}</div></div>
+    <div class="stat-card"><div class="label">Total TDS Deducted</div><div class="value">${fmt(totals.tds)}</div></div>
+    <div class="stat-card ${totals.profit < 0 ? 'negative' : 'positive'}"><div class="label">Net Profit / Loss</div><div class="value">${fmt(totals.profit)}</div></div>
+  `;
+
+  const tbody = $('#pnlTbody');
+  if (!rows.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No sales, purchases, or expenses recorded yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.period)}</td>
+      <td>${fmt(r.sales)}</td>
+      <td>${fmt(r.tds)}</td>
+      <td>${fmt(r.purchases)}</td>
+      <td>${fmt(r.expenses)}</td>
+      <td>${fmt(r.profit)}</td>
+    </tr>
+  `).join('');
+}
+
+$('#pnlAnnualBtn').addEventListener('click', () => {
+  pnlPeriodMode = 'annual';
+  $('#pnlAnnualBtn').classList.add('active');
+  $('#pnlMonthlyBtn').classList.remove('active');
+  renderProfitLoss();
+});
+$('#pnlMonthlyBtn').addEventListener('click', () => {
+  pnlPeriodMode = 'monthly';
+  $('#pnlMonthlyBtn').classList.add('active');
+  $('#pnlAnnualBtn').classList.remove('active');
+  renderProfitLoss();
+});
+
+/* =====================================================================
+   GST PAYMENT (monthly output vs. input GST owed to the government)
+===================================================================== */
+function computeGSTByPeriod(mode) {
+  const map = new Map();
+  function ensure(key) {
+    if (!map.has(key)) map.set(key, { output: 0, input: 0 });
+    return map.get(key);
+  }
+  const keyFor = (dateStr) => mode === 'annual' ? currentFinancialYear(new Date(dateStr)) : dateStr.slice(0, 7);
+  Store.getInvoices().forEach(inv => {
+    const row = ensure(keyFor(inv.date));
+    row.output += (Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0);
+  });
+  Store.getPurchases().forEach(p => {
+    const row = ensure(keyFor(p.date));
+    row.input += (Number(p.cgst) || 0) + (Number(p.sgst) || 0) + (Number(p.igst) || 0);
+  });
+  return Array.from(map.entries())
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([key, v]) => ({
+      period: mode === 'annual' ? `FY ${key}` : formatMonthLabel(key),
+      output: v.output,
+      input: v.input,
+      net: v.output - v.input,
+      dueDate: mode === 'monthly' ? gstDueDate(key) : null,
+    }));
+}
+
+function gstDueDate(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m, 20).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+let gstPeriodMode = 'annual';
+
+function renderGstPayment() {
+  const rows = computeGSTByPeriod(gstPeriodMode);
+  const totals = rows.reduce((acc, r) => ({
+    output: acc.output + r.output,
+    input: acc.input + r.input,
+    net: acc.net + r.net,
+  }), { output: 0, input: 0, net: 0 });
+
+  $('#gstStatCards').innerHTML = `
+    <div class="stat-card"><div class="label">Total Output GST (Collected)</div><div class="value">${fmt(totals.output)}</div></div>
+    <div class="stat-card"><div class="label">Total Input GST (ITC)</div><div class="value">${fmt(totals.input)}</div></div>
+    <div class="stat-card"><div class="label">Net GST Payable</div><div class="value">${fmt(totals.net)}</div></div>
+  `;
+
+  const tbody = $('#gstTbody');
+  if (!rows.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">No invoices or purchases recorded yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.period)}</td>
+      <td>${fmt(r.output)}</td>
+      <td>${fmt(r.input)}</td>
+      <td>${fmt(r.net)}</td>
+      <td>${r.dueDate ? escapeHtml(r.dueDate) : '-'}</td>
+    </tr>
+  `).join('');
+}
+
+$('#gstAnnualBtn').addEventListener('click', () => {
+  gstPeriodMode = 'annual';
+  $('#gstAnnualBtn').classList.add('active');
+  $('#gstMonthlyBtn').classList.remove('active');
+  renderGstPayment();
+});
+$('#gstMonthlyBtn').addEventListener('click', () => {
+  gstPeriodMode = 'monthly';
+  $('#gstMonthlyBtn').classList.add('active');
+  $('#gstAnnualBtn').classList.remove('active');
+  renderGstPayment();
+});
+
+/* =====================================================================
+   CHARTS (Charts tab: Company Sales / Product Sales / Pending Payments)
+===================================================================== */
+const CHART_COLORS = ['#2f6fed', '#1a9c5f', '#d9432f', '#b8860b', '#7c3aed', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#0d9488'];
+function colorForIndex(i) { return CHART_COLORS[i % CHART_COLORS.length]; }
+
+/** Sums every invoice's total by company — all-time, no period filter, so any invoice (past, present, or backdated) always counts. */
+function computeCompanySalesTotals() {
+  const totals = new Map(); // companyId -> total
+  Store.getInvoices().forEach(inv => {
+    totals.set(inv.companyId, (totals.get(inv.companyId) || 0) + (Number(inv.total) || 0));
+  });
+  return Array.from(totals.entries())
+    .map(([companyId, total]) => ({ name: companyName(companyId) || 'Unknown Company', value: Math.round(total * 100) / 100 }))
+    .filter(s => s.value > 0.009)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Sums every invoice line item's total (qty*rate*(1+gst%), matching pdf.js's buildItemRows) by product name — all-time, no period filter. */
+function computeProductSalesTotals() {
+  const totals = new Map(); // product name -> total
+  Store.getInvoices().forEach(inv => {
+    (inv.items || []).forEach(item => {
+      const taxable = (Number(item.qty) || 0) * (Number(item.rate) || 0);
+      const lineTotal = taxable * (1 + (Number(item.gstPercent) || 0) / 100);
+      totals.set(item.name, (totals.get(item.name) || 0) + lineTotal);
+    });
+  });
+  return Array.from(totals.entries())
+    .map(([name, total]) => ({ name, value: Math.round(total * 100) / 100 }))
+    .filter(s => s.value > 0.009)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Indian FY quarter: Q1 Apr-Jun, Q2 Jul-Sep, Q3 Oct-Dec, Q4 Jan-Mar (aligns with currentFinancialYear's Apr-start FY). */
+function financialQuarterOf(date) {
+  const month = date.getMonth(); // 0 = Jan
+  if (month >= 3 && month <= 5) return 1;
+  if (month >= 6 && month <= 8) return 2;
+  if (month >= 9 && month <= 11) return 3;
+  return 4;
+}
+
+function salesTrendPeriodKey(mode, dateStr) {
+  const d = new Date(dateStr);
+  if (mode === 'annual') {
+    const fy = currentFinancialYear(d);
+    return { key: fy, label: `FY ${fy}` };
+  }
+  if (mode === 'quarterly') {
+    const fy = currentFinancialYear(d);
+    const q = financialQuarterOf(d);
+    return { key: `${fy}-Q${q}`, label: `Q${q} FY ${fy}` };
+  }
+  const ym = dateStr.slice(0, 7);
+  return { key: ym, label: formatMonthLabel(ym) };
+}
+
+/** Groups invoice totals by company and by period (mode: 'monthly' | 'quarterly' | 'annual') for the Trend bar view. */
+function computeCompanySalesByPeriod(mode) {
+  const periodLabels = new Map();
+  const companyTotals = new Map(); // companyId -> Map(periodKey -> total)
+
+  Store.getInvoices().forEach(inv => {
+    const { key, label } = salesTrendPeriodKey(mode, inv.date);
+    if (!periodLabels.has(key)) periodLabels.set(key, label);
+    if (!companyTotals.has(inv.companyId)) companyTotals.set(inv.companyId, new Map());
+    const perPeriod = companyTotals.get(inv.companyId);
+    perPeriod.set(key, (perPeriod.get(key) || 0) + (Number(inv.total) || 0));
+  });
+
+  const sortedKeys = Array.from(periodLabels.keys()).sort();
+  const labels = sortedKeys.map(k => periodLabels.get(k));
+  const datasets = Array.from(companyTotals.entries())
+    .map(([companyId, perPeriod]) => ({
+      name: companyName(companyId) || 'Unknown Company',
+      data: sortedKeys.map(k => Math.round((perPeriod.get(k) || 0) * 100) / 100),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  return { labels, datasets };
+}
+
+/** Groups each invoice line item's total by product name and period (mode: 'monthly' | 'quarterly' | 'annual') for the Trend bar view. */
+function computeProductSalesByPeriod(mode) {
+  const periodLabels = new Map();
+  const productTotals = new Map(); // product name -> Map(periodKey -> total)
+
+  Store.getInvoices().forEach(inv => {
+    const { key, label } = salesTrendPeriodKey(mode, inv.date);
+    if (!periodLabels.has(key)) periodLabels.set(key, label);
+    (inv.items || []).forEach(item => {
+      const taxable = (Number(item.qty) || 0) * (Number(item.rate) || 0);
+      const lineTotal = taxable * (1 + (Number(item.gstPercent) || 0) / 100);
+      if (!productTotals.has(item.name)) productTotals.set(item.name, new Map());
+      const perPeriod = productTotals.get(item.name);
+      perPeriod.set(key, (perPeriod.get(key) || 0) + lineTotal);
+    });
+  });
+
+  const sortedKeys = Array.from(periodLabels.keys()).sort();
+  const labels = sortedKeys.map(k => periodLabels.get(k));
+  const datasets = Array.from(productTotals.entries())
+    .map(([name, perPeriod]) => ({
+      name,
+      data: sortedKeys.map(k => Math.round((perPeriod.get(k) || 0) * 100) / 100),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  return { labels, datasets };
+}
+
+/** Shared pie renderer (Breakdown view): destroys any prior instance and either draws the pie or shows the empty-state card. */
+function renderPieChart(canvasSel, emptyElSel, prevInstance, slices) {
+  const canvas = $(canvasSel);
+  const emptyEl = $(emptyElSel);
+  if (prevInstance) prevInstance.destroy();
+
+  if (!slices.length) {
+    canvas.style.display = 'none';
+    emptyEl.style.display = 'block';
+    return null;
+  }
+  canvas.style.display = 'block';
+  emptyEl.style.display = 'none';
+
+  return new Chart(canvas.getContext('2d'), {
+    type: 'pie',
+    data: {
+      labels: slices.map(s => s.name),
+      datasets: [{ data: slices.map(s => s.value), backgroundColor: slices.map((_, i) => colorForIndex(i)) }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'right' },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmt(ctx.parsed)}` } },
+      },
+    },
+  });
+}
+
+/** Shared grouped-bar renderer (Trend view): one bar series per company/product, periods along the x-axis. */
+function renderBarChart(canvasSel, emptyElSel, prevInstance, labels, datasets) {
+  const canvas = $(canvasSel);
+  const emptyEl = $(emptyElSel);
+  if (prevInstance) prevInstance.destroy();
+
+  if (!datasets.length) {
+    canvas.style.display = 'none';
+    emptyEl.style.display = 'block';
+    return null;
+  }
+  canvas.style.display = 'block';
+  emptyEl.style.display = 'none';
+
+  return new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: datasets.map((ds, i) => ({ label: ds.name, data: ds.data, backgroundColor: colorForIndex(i) })),
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { y: { beginAtZero: true, ticks: { callback: (v) => fmt(v) } } },
+      plugins: {
+        legend: { position: 'bottom' },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}` } },
+      },
+    },
+  });
+}
+
+/**
+ * Company Sales and Product Sales each toggle between a Breakdown pie (all-time totals, always
+ * reflects every invoice regardless of date) and a Trend bar chart (Monthly/Quarterly/FY, one
+ * series per company/product) — sharing this one config-driven implementation instead of two
+ * near-identical copies.
+ */
+const SALES_CHARTS = {
+  company: { prefix: 'companySales', computeTotals: computeCompanySalesTotals, computeByPeriod: computeCompanySalesByPeriod },
+  product: { prefix: 'productSales', computeTotals: computeProductSalesTotals, computeByPeriod: computeProductSalesByPeriod },
+};
+const salesChartState = {
+  company: { view: 'breakdown', trend: 'annual', instance: null },
+  product: { view: 'breakdown', trend: 'annual', instance: null },
+};
+
+function renderSalesChart(key) {
+  const cfg = SALES_CHARTS[key];
+  const state = salesChartState[key];
+  const canvasSel = `#${cfg.prefix}ChartCanvas`;
+  const emptySel = `#${cfg.prefix}ChartEmpty`;
+  if (state.view === 'trend') {
+    const { labels, datasets } = cfg.computeByPeriod(state.trend);
+    state.instance = renderBarChart(canvasSel, emptySel, state.instance, labels, datasets);
+  } else {
+    state.instance = renderPieChart(canvasSel, emptySel, state.instance, cfg.computeTotals());
+  }
+}
+
+function wireSalesChartToggles(key) {
+  const p = SALES_CHARTS[key].prefix;
+  $(`#${p}ViewBreakdownBtn`).addEventListener('click', () => {
+    salesChartState[key].view = 'breakdown';
+    $(`#${p}ViewBreakdownBtn`).classList.add('active');
+    $(`#${p}ViewTrendBtn`).classList.remove('active');
+    $(`#${p}TrendToggleRow`).style.display = 'none';
+    renderSalesChart(key);
+  });
+  $(`#${p}ViewTrendBtn`).addEventListener('click', () => {
+    salesChartState[key].view = 'trend';
+    $(`#${p}ViewTrendBtn`).classList.add('active');
+    $(`#${p}ViewBreakdownBtn`).classList.remove('active');
+    $(`#${p}TrendToggleRow`).style.display = 'flex';
+    renderSalesChart(key);
+  });
+  const trendIds = { monthly: `#${p}MonthlyBtn`, quarterly: `#${p}QuarterlyBtn`, annual: `#${p}AnnualBtn` };
+  Object.entries(trendIds).forEach(([mode, id]) => {
+    $(id).addEventListener('click', () => {
+      salesChartState[key].trend = mode;
+      Object.values(trendIds).forEach(i => $(i).classList.remove('active'));
+      $(id).classList.add('active');
+      renderSalesChart(key);
+    });
+  });
+}
+wireSalesChartToggles('company');
+wireSalesChartToggles('product');
+
+function renderCompanySalesChart() { renderSalesChart('company'); }
+function renderProductSalesChart() { renderSalesChart('product'); }
+
+let pendingPaymentsChartInstance = null;
+function renderPendingPaymentsChart() {
+  const slices = computeCompanyOutstanding()
+    .filter(r => r.owed > 0.009)
+    .map(r => ({ name: r.company.name, value: Math.round(r.owed * 100) / 100 }));
+  pendingPaymentsChartInstance = renderPieChart('#pendingPaymentsChartCanvas', '#pendingPaymentsChartEmpty', pendingPaymentsChartInstance, slices);
+}
+
+/* =====================================================================
+   EXCEL EXPORT
+===================================================================== */
+function paymentStatusText(inv) {
+  if (!inv.payment || !inv.payment.received) return 'Unpaid';
+  if (inv.payment.shortfallType === 'tds' && inv.payment.shortfallAmount > 0.009) return 'TDS Deducted';
+  if (inv.payment.shortfallAmount > 0.009) return 'Partially Paid';
+  return 'Paid';
+}
+
+function invoiceExportRow(inv) {
+  return {
+    'Invoice No': inv.invoiceNo,
+    'Date': inv.date,
+    'Company': companyName(inv.companyId),
+    'Subtotal': Number(inv.subtotal) || 0,
+    'CGST': Number(inv.cgst) || 0,
+    'SGST': Number(inv.sgst) || 0,
+    'IGST': Number(inv.igst) || 0,
+    'Total': Number(inv.total) || 0,
+    'Amount Received': inv.payment && inv.payment.received ? Number(inv.payment.amountReceived) || 0 : 0,
+    'Payment Date': inv.payment && inv.payment.received ? (inv.payment.paymentDate || '') : '',
+    'Shortfall Type': inv.payment && inv.payment.shortfallType ? (inv.payment.shortfallType === 'tds' ? 'TDS' : 'Pending') : '',
+    'Shortfall Amount': inv.payment ? Number(inv.payment.shortfallAmount) || 0 : 0,
+    'Balance Due': Math.round(invoiceBalance(inv) * 100) / 100,
+    'Status': paymentStatusText(inv),
+  };
+}
+
+function paymentExportRow(inv) {
+  return {
+    'Invoice No': inv.invoiceNo,
+    'Date': inv.date,
+    'Company': companyName(inv.companyId),
+    'Invoice Total': Number(inv.total) || 0,
+    'Amount Received': inv.payment && inv.payment.received ? Number(inv.payment.amountReceived) || 0 : 0,
+    'Payment Date': inv.payment && inv.payment.received ? (inv.payment.paymentDate || '') : '',
+    'Balance Due': Math.round(invoiceBalance(inv) * 100) / 100,
+    'Expected Payment Date': expectedPaymentDate(inv),
+    'Status': paymentStatusText(inv),
+  };
+}
+
+function purchaseExportRow(p) {
+  return {
+    'Purchase No': p.purchaseNo,
+    'Date': p.date,
+    'Company': companyName(p.companyId),
+    'Subtotal': Number(p.subtotal) || 0,
+    'CGST': Number(p.cgst) || 0,
+    'SGST': Number(p.sgst) || 0,
+    'IGST': Number(p.igst) || 0,
+    'Total': Number(p.total) || 0,
+    'Payment Done': p.paymentDone ? 'Yes' : 'No',
+    'Payment Note': p.paymentNote || '',
+  };
+}
+
+function expenseExportRow(e) {
+  return {
+    'Date': e.date,
+    'Category': e.category,
+    'Description': e.description || '',
+    'Amount': Number(e.amount) || 0,
+  };
+}
+
+function downloadWorkbook(sheets, filename) {
+  const wb = XLSX.utils.book_new();
+  sheets.forEach(({ name, rows }) => {
+    const ws = rows.length ? XLSX.utils.json_to_sheet(rows) : XLSX.utils.aoa_to_sheet([['No data for this selection']]);
+    XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+  });
+  XLSX.writeFile(wb, filename);
+}
+
+function invoicePeriodKey(mode, dateStr) {
+  return mode === 'annual' ? currentFinancialYear(new Date(dateStr)) : dateStr.slice(0, 7);
+}
+
+function getInvoicePeriodOptions(mode) {
+  const keys = new Set(Store.getInvoices().map(inv => invoicePeriodKey(mode, inv.date)));
+  return Array.from(keys).sort().reverse().map(key => ({
+    value: key,
+    label: mode === 'annual' ? `FY ${key}` : formatMonthLabel(key),
+  }));
+}
+
+function getFinancialYearOptions() {
+  const keys = new Set([
+    ...Store.getInvoices().map(inv => currentFinancialYear(new Date(inv.date))),
+    ...Store.getPurchases().map(p => currentFinancialYear(new Date(p.date))),
+    ...Store.getExpenses().map(e => currentFinancialYear(new Date(e.date))),
+  ]);
+  return Array.from(keys).sort().reverse();
+}
+
+let exportPeriodMode = 'monthly';
+
+function populateExportPeriodSelect() {
+  const options = getInvoicePeriodOptions(exportPeriodMode);
+  const sel = $('#exportPeriodValue');
+  sel.innerHTML = options.length
+    ? options.map(o => `<option value="${o.value}">${escapeHtml(o.label)}</option>`).join('')
+    : `<option value="">No invoices yet</option>`;
+}
+
+function populateExportFYSelect() {
+  const fys = getFinancialYearOptions();
+  const sel = $('#exportFYValue');
+  sel.innerHTML = fys.length
+    ? fys.map(fy => `<option value="${fy}">FY ${fy}</option>`).join('')
+    : `<option value="">No data yet</option>`;
+}
+
+function populateExportCompanySelect() {
+  const companies = Store.getCompanies().filter(c => c.isSalesCompany).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const sel = $('#exportCompanyId');
+  sel.innerHTML = companies.length
+    ? companies.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')
+    : `<option value="">No companies yet</option>`;
+}
+
+function updateExportFieldsVisibility() {
+  const type = $('#exportType').value;
+  $('#exportPeriodFields').style.display = type === 'invoicesByPeriod' ? '' : 'none';
+  $('#exportFYFields').style.display = type === 'fySummary' ? '' : 'none';
+  $('#exportCompanyFields').style.display = type === 'invoicesByCompany' ? '' : 'none';
+  if (type === 'invoicesByPeriod') populateExportPeriodSelect();
+  if (type === 'fySummary') populateExportFYSelect();
+  if (type === 'invoicesByCompany') populateExportCompanySelect();
+}
+
+$('#btnOpenExport').addEventListener('click', () => {
+  $('#exportType').value = 'invoicesByPeriod';
+  exportPeriodMode = 'monthly';
+  $('#exportPeriodModeMonthlyBtn').classList.add('active');
+  $('#exportPeriodModeAnnualBtn').classList.remove('active');
+  updateExportFieldsVisibility();
+  openModal('exportModal');
+});
+
+$('#exportType').addEventListener('change', updateExportFieldsVisibility);
+
+$('#exportPeriodModeMonthlyBtn').addEventListener('click', () => {
+  exportPeriodMode = 'monthly';
+  $('#exportPeriodModeMonthlyBtn').classList.add('active');
+  $('#exportPeriodModeAnnualBtn').classList.remove('active');
+  populateExportPeriodSelect();
+});
+$('#exportPeriodModeAnnualBtn').addEventListener('click', () => {
+  exportPeriodMode = 'annual';
+  $('#exportPeriodModeAnnualBtn').classList.add('active');
+  $('#exportPeriodModeMonthlyBtn').classList.remove('active');
+  populateExportPeriodSelect();
+});
+
+function exportInvoicesByPeriod(mode, key) {
+  const invoices = Store.getInvoices()
+    .filter(inv => invoicePeriodKey(mode, inv.date) === key)
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  const label = mode === 'annual' ? `FY_${key}` : key;
+  downloadWorkbook([{ name: 'Invoices', rows: invoices.map(invoiceExportRow) }], `Invoices_${label}.xlsx`);
+}
+
+function exportFinancialYearSummary(fy) {
+  const inFY = (dateStr) => currentFinancialYear(new Date(dateStr)) === fy;
+  const invoices = Store.getInvoices().filter(inv => inFY(inv.date)).sort((a, b) => new Date(a.date) - new Date(b.date));
+  const purchases = Store.getPurchases().filter(p => inFY(p.date)).sort((a, b) => new Date(a.date) - new Date(b.date));
+  const expenses = Store.getExpenses().filter(e => inFY(e.date)).sort((a, b) => new Date(a.date) - new Date(b.date));
+  downloadWorkbook([
+    { name: 'Invoices', rows: invoices.map(invoiceExportRow) },
+    { name: 'Payments', rows: invoices.map(paymentExportRow) },
+    { name: 'Purchases', rows: purchases.map(purchaseExportRow) },
+    { name: 'Expenses', rows: expenses.map(expenseExportRow) },
+  ], `Financial_Summary_FY_${fy}.xlsx`);
+}
+
+function exportInvoicesByCompany(companyId) {
+  const invoices = Store.getInvoices()
+    .filter(inv => inv.companyId === companyId)
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  const safeName = companyName(companyId).replace(/[^a-z0-9]+/gi, '_');
+  downloadWorkbook([{ name: 'Invoices', rows: invoices.map(invoiceExportRow) }], `Invoices_${safeName}.xlsx`);
+}
+
+$('#downloadExportBtn').addEventListener('click', () => {
+  const type = $('#exportType').value;
+  if (type === 'invoicesByPeriod') {
+    const key = $('#exportPeriodValue').value;
+    if (!key) { toast('No invoices available for that selection'); return; }
+    exportInvoicesByPeriod(exportPeriodMode, key);
+  } else if (type === 'fySummary') {
+    const fy = $('#exportFYValue').value;
+    if (!fy) { toast('No data available to export'); return; }
+    exportFinancialYearSummary(fy);
+  } else if (type === 'invoicesByCompany') {
+    const companyId = $('#exportCompanyId').value;
+    if (!companyId) { toast('Select a company first'); return; }
+    exportInvoicesByCompany(companyId);
+  }
+  closeModal('exportModal');
+  toast('Export downloaded');
+});
+
+/* =====================================================================
+   INIT
+===================================================================== */
+function init() {
+  loadProfileForm();
+  renderProducts();
+  renderCompanies();
+  populateCompanyDropdowns();
+  renderQuotations();
+  renderInvoices();
+  renderPurchases();
+  renderPurchasesByCompany();
+  renderExpenses();
+  renderPayments();
+  renderSummary();
+  populateUnitOptions();
+  populateGstRateOptions($('#productGst'));
+  populateExpenseCategoryOptions();
+}
+
+Store.ready.then(init);

@@ -179,7 +179,41 @@
     "sealDataUrl": ""
   },
   "qb_quotations": [],
-  "qb_invoices": [],
+  "qb_invoices": [
+    {
+      "id": "mt8zlxkhn6r87p",
+      "companyId": "mt7gyhffup3c9w",
+      "date": "2026-08-25",
+      "items": [
+        {
+          "productId": "mt7ho6o1qf3y9r",
+          "name": "RO Antiscalant Indion 8211",
+          "hsnCode": "38249090",
+          "unit": "Kilogram",
+          "qty": 1,
+          "rate": 355,
+          "gstPercent": 18,
+          "details": "Ion Exchange India Ltd."
+        }
+      ],
+      "subtotal": 355,
+      "cgst": 31.95,
+      "sgst": 31.95,
+      "igst": 0,
+      "total": 418.9,
+      "invoiceNo": "INV/2026-27/001",
+      "challanNo": "CH/2026-27/001",
+      "amountInWords": "Rupees Four Hundred Eighteen and Ninety Paise Only",
+      "payment": {
+        "received": false,
+        "amountReceived": null,
+        "paymentDate": null,
+        "shortfallType": null,
+        "shortfallAmount": 0
+      },
+      "createdAt": "2026-08-25T18:17:17.105Z"
+    }
+  ],
   "qb_purchases": [],
   "qb_expenses": [],
   "qb_units": [

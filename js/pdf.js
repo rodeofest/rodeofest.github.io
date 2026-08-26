@@ -8,8 +8,23 @@ function fmtMoney(n) {
 
 function fmtDate(iso) {
   if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  // parseLocalDate (js/numbering.js) avoids the UTC-parse/local-getter mismatch
+  // new Date(iso) has for a plain "YYYY-MM-DD" string — see its own comment.
+  return parseLocalDate(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+/* Logo/seal uploads accept any image/* file, but doc.addImage() needs the actual
+   format to match the data — passing a hardcoded 'PNG' for a JPEG/WEBP/BMP upload
+   makes jsPDF silently fail (caught below) and the image just never appears.
+   Detects the real type from the data URL's mime prefix; anything unrecognized
+   (including already-PNG data) falls back to 'PNG', matching prior behavior. */
+function imageFormatFromDataUrl(dataUrl) {
+  const match = /^data:image\/([a-zA-Z0-9.+-]+);/.exec(dataUrl || '');
+  const type = match ? match[1].toLowerCase() : '';
+  if (type === 'jpeg' || type === 'jpg') return 'JPEG';
+  if (type === 'webp') return 'WEBP';
+  if (type === 'bmp') return 'BMP';
+  return 'PNG';
 }
 
 function drawHeader(doc, profile, company, opts) {
@@ -23,7 +38,7 @@ function drawHeader(doc, profile, company, opts) {
 
   if (profile.logoDataUrl) {
     try {
-      doc.addImage(profile.logoDataUrl, 'PNG', PAGE_MARGIN, 10, 24, 24);
+      doc.addImage(profile.logoDataUrl, imageFormatFromDataUrl(profile.logoDataUrl), PAGE_MARGIN, 10, 24, 24);
     } catch (e) { /* ignore unreadable image */ }
   }
 
@@ -313,7 +328,7 @@ function buildInvoicePdf(invoice, company, profile) {
   if (includeSeal) {
     if (profile.sealDataUrl) {
       try {
-        doc.addImage(profile.sealDataUrl, 'PNG', sealX, sealY, 40, sealAreaHeight);
+        doc.addImage(profile.sealDataUrl, imageFormatFromDataUrl(profile.sealDataUrl), sealX, sealY, 40, sealAreaHeight);
       } catch (e) { /* ignore */ }
     } else {
       doc.setDrawColor(180);

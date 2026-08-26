@@ -56,6 +56,7 @@ body {
   cursor: pointer;
 }
 .data-file-indicator.data-file-error { color: #ffb4a8; font-weight: 600; }
+.data-file-indicator.data-file-unsaved { color: #ffd479; font-weight: 600; }
 .settings-btn {
   border: none;
   background: rgba(255,255,255,0.12);
@@ -167,6 +168,33 @@ body {
 .btn-success:hover { background: #d3f0e1; }
 .btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 5px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---- View-only role and delete-restriction: visual affordance only; the
+   real blocks are in js/app.js's blockIfViewer()/blockDeleteIfNotAdmin()
+   guards (see CLAUDE.md). Settings gear/indicator are hidden outright for a
+   viewer since every item behind them is blocked anyway. .non-admin also
+   applies to Viewers (harmless overlap — everything's already greyed out for
+   them) but, unlike .viewer-mode, only greys delete-like buttons, not
+   Save/Confirm/Record-Payment — a regular non-admin User keeps full edit
+   access, only Delete is admin-only. ---- */
+body.viewer-mode .btn-danger,
+body.non-admin .btn-danger,
+body.viewer-mode .btn-success,
+body.viewer-mode [data-mutating] {
+  opacity: 0.45;
+  pointer-events: none;
+  cursor: not-allowed;
+}
+body.viewer-mode #btnOpenSettings,
+body.viewer-mode #dataFileIndicator { display: none; }
+
+/* Error Logs tab and the "Download DB Snapshot" header button are Admin-only
+   visibility — hidden for both Viewers and regular non-admin Users (both
+   carry .non-admin, see js/app.js's runLoginGate()); js/app.js's activateTab()
+   and the button's own click handler also re-check directly, in case either
+   is reached some other way. */
+body.non-admin #navErrorLogs,
+body.non-admin #btnDownloadDbSnapshot { display: none; }
 
 /* ---- Cards / tables ---- */
 .card {
@@ -455,6 +483,27 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
 .accordion-title { font-weight: 600; }
 .accordion-meta { color: var(--text-muted); font-size: 12.5px; margin-left: auto; }
 .accordion-body { border-top: 1px solid var(--border); }
+
+/* ---- DB connectivity banner (pre-login offline bypass + mid-session Supabase monitoring) ---- */
+.db-connectivity-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 20px;
+  font-size: 12.5px; font-weight: 600;
+  color: #fff;
+}
+.db-connectivity-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.db-connectivity-banner.db-connectivity-ok { background: var(--success); }
+.db-connectivity-banner.db-connectivity-warn { background: var(--warning); }
+.db-connectivity-banner.db-connectivity-down { background: var(--danger); }
+.db-connectivity-banner #bypassLoginSyncBtn {
+  margin-left: auto;
+  background: rgba(255,255,255,0.9); color: var(--text);
+}
+.db-connectivity-banner #bypassLoginSyncBtn:hover { background: #fff; }
 
 @media (max-width: 720px) {
   .tab-panel { padding: 14px; }

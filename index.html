@@ -10,10 +10,77 @@
 
 <div class="file-gate-overlay" id="fileGateOverlay">
   <div class="file-gate-card">
-    <h2>Connect Your Data Folder</h2>
+    <h2 id="fileGateTitle">Connect Your Data Folder</h2>
     <p id="fileGateMessage">Checking for a previously connected data folder…</p>
     <button class="btn btn-primary" id="fileGateSelectBtn" type="button" style="display:none;">Select Data Folder</button>
   </div>
+</div>
+
+<!-- Shown once, on first run only, before any Supabase URL/anon key has been saved. -->
+<div class="file-gate-overlay" id="supabaseSetupGateOverlay" style="display:none; z-index:5050;">
+  <div class="file-gate-card">
+    <h2>Connect Supabase</h2>
+    <p>Logging in requires a Supabase project (real password verification happens on Supabase's server, not in this app). Enter your project's URL and anon/public API key once — this is remembered for future visits.</p>
+    <div class="form-field">
+      <label for="supabaseSetupUrl">Project URL</label>
+      <input type="text" id="supabaseSetupUrl" placeholder="https://xxxxx.supabase.co">
+    </div>
+    <div class="form-field">
+      <label for="supabaseSetupKey">Anon / Public API Key</label>
+      <input type="text" id="supabaseSetupKey" placeholder="eyJhbGciOi...">
+    </div>
+    <p id="supabaseSetupError" class="form-hint" style="color:var(--danger); display:none;"></p>
+    <button class="btn btn-primary" id="supabaseSetupSaveBtn" type="button">Save &amp; Continue</button>
+  </div>
+</div>
+
+<!-- Shown once at boot, before the login screen, if Supabase can't be reached at all —
+     never shown mid-session (that's the separate connectivity banner below). -->
+<div class="file-gate-overlay" id="dbConnectivityGateOverlay" style="display:none; z-index:5080;">
+  <div class="file-gate-card">
+    <h2>Could Not Reach the Database</h2>
+    <p>The configured Supabase project could not be reached, so logging in isn't possible right now. You can retry, or work offline against the local data file for this session — you'll be able to log in and sync your changes once the connection is back.</p>
+    <button class="btn btn-primary" id="dbConnectivityRetryBtn" type="button">Retry</button>
+    <button class="btn btn-secondary" id="dbConnectivityLoadFileBtn" type="button" style="margin-top:8px;">Load from Data File</button>
+  </div>
+</div>
+
+<!-- Shown on every load, after the gates above resolve. No persisted session by design. -->
+<div class="file-gate-overlay" id="loginGateOverlay" style="display:none; z-index:5100;">
+  <div class="file-gate-card">
+    <h2>Log In</h2>
+    <div class="form-field">
+      <label for="loginUsername">User ID</label>
+      <input type="text" id="loginUsername" autocomplete="username">
+    </div>
+    <div class="form-field">
+      <label for="loginPassword">Password</label>
+      <input type="password" id="loginPassword" autocomplete="current-password">
+    </div>
+    <p id="loginError" class="form-hint" style="color:var(--danger); display:none;"></p>
+    <button class="btn btn-primary" id="loginSubmitBtn" type="button">Log In</button>
+  </div>
+</div>
+
+<!-- Shown only if the Database flag is on and resuming the Supabase backend fails after login. Never
+     silently falls back to anything — the user explicitly picks Retry or Local File. -->
+<div class="file-gate-overlay" id="supabaseResumeFailedOverlay" style="display:none; z-index:5150;">
+  <div class="file-gate-card">
+    <h2>Could Not Reach Supabase</h2>
+    <p>This data source is configured to use Supabase, but it could not be reached just now. Your Supabase setting is not changed either way — the app will try Supabase again next time you reload.</p>
+    <button class="btn btn-primary" id="supabaseResumeRetryBtn" type="button">Retry Supabase Connection</button>
+    <button class="btn btn-secondary" id="supabaseResumeUseLocalBtn" type="button" style="margin-top:8px;">Use Local Data File Instead</button>
+  </div>
+</div>
+
+<!-- Live database connectivity status — hidden in plain local-file mode (no
+     outage involved), shown red while working offline via the pre-login
+     bypass (with a "Log In & Sync" recovery action) or green/amber/red once
+     logged in with the Supabase backend active (see CLAUDE.md). -->
+<div class="db-connectivity-banner" id="dbConnectivityBanner" style="display:none;">
+  <span class="db-connectivity-dot" id="dbConnectivityDot"></span>
+  <span id="dbConnectivityText"></span>
+  <button class="btn btn-sm" id="bypassLoginSyncBtn" type="button" style="display:none;">Log In &amp; Sync</button>
 </div>
 
 <header class="topbar">
@@ -24,12 +91,16 @@
   </div>
   <div class="header-actions">
     <button class="btn btn-secondary" id="btnOpenExport" type="button">Export</button>
+    <button class="btn btn-secondary" id="btnDownloadDbSnapshot" type="button" title="Fetch the latest data from the database and download it as business-suite-data.json">Download DB Snapshot</button>
+    <button class="btn btn-secondary" id="btnLogout" type="button">Logout</button>
     <div class="settings-menu">
       <button class="settings-btn" id="btnOpenSettings" type="button" title="Settings">&#9881;</button>
       <div class="settings-dropdown" id="settingsDropdown">
         <button type="button" data-settings-action="profile">Business Profile</button>
         <button type="button" data-settings-action="defaultConfig">Default Configurations</button>
         <button type="button" data-settings-action="dataFile">Data File</button>
+        <button type="button" data-settings-action="userConfig">User Configuration</button>
+        <button type="button" data-settings-action="dbConnection">DB Connection</button>
       </div>
     </div>
   </div>
@@ -42,6 +113,7 @@
   <button class="tab-btn" data-tab="products">Products</button>
   <button class="tab-btn" data-tab="companies">Company</button>
   <button class="tab-btn" data-group="charts">Charts</button>
+  <button class="tab-btn" data-tab="errorLogs" id="navErrorLogs">Error Logs</button>
 </nav>
 
 <nav class="tabs tabs-sub" id="subnav-financials" style="display:flex;">
@@ -60,6 +132,8 @@
   <button class="tab-btn sub active" data-tab="companySalesChart">Company Sales</button>
   <button class="tab-btn sub" data-tab="productSalesChart">Product Sales</button>
   <button class="tab-btn sub" data-tab="pendingPaymentsChart">Pending Payments</button>
+  <button class="tab-btn sub" data-tab="purchaseCompanyChart">Purchases by Company</button>
+  <button class="tab-btn sub" data-tab="expenseCategoryChart">Cash / Manual Expenses</button>
 </nav>
 
 <!-- ===================== PRODUCTS ===================== -->
@@ -413,6 +487,83 @@
   </div>
 </section>
 
+<!-- ===================== PURCHASES BY COMPANY CHART ===================== -->
+<section class="tab-panel" id="tab-purchaseCompanyChart">
+  <div class="panel-header"><h2>Purchases by Company</h2></div>
+
+  <div class="card" style="padding:18px;">
+    <div class="panel-header" style="margin-bottom:10px;">
+      <h3 style="margin:0;">Purchases by Company</h3>
+      <div class="seg-toggle">
+        <button class="seg-btn active" id="purchaseCompanyViewBreakdownBtn" type="button">Breakdown</button>
+        <button class="seg-btn" id="purchaseCompanyViewTrendBtn" type="button">Trend</button>
+      </div>
+    </div>
+    <div class="seg-toggle" id="purchaseCompanyTrendToggleRow" style="display:none; margin-bottom:14px;">
+      <button class="seg-btn" id="purchaseCompanyMonthlyBtn" type="button">Monthly</button>
+      <button class="seg-btn" id="purchaseCompanyQuarterlyBtn" type="button">Quarterly</button>
+      <button class="seg-btn active" id="purchaseCompanyAnnualBtn" type="button">FY</button>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="purchaseCompanyChartCanvas"></canvas>
+    </div>
+    <div class="card" id="purchaseCompanyChartEmpty" style="display:none; box-shadow:none; border:none; text-align:center; color:var(--text-muted); padding:30px 0;">No purchases yet to chart.</div>
+  </div>
+</section>
+
+<!-- ===================== CASH / MANUAL EXPENSES CHART ===================== -->
+<section class="tab-panel" id="tab-expenseCategoryChart">
+  <div class="panel-header"><h2>Cash / Manual Expenses</h2></div>
+
+  <div class="card" style="padding:18px;">
+    <div class="panel-header" style="margin-bottom:10px;">
+      <h3 style="margin:0;">Expenses by Category</h3>
+      <div class="seg-toggle">
+        <button class="seg-btn active" id="expenseCategoryViewBreakdownBtn" type="button">Breakdown</button>
+        <button class="seg-btn" id="expenseCategoryViewTrendBtn" type="button">Trend</button>
+      </div>
+    </div>
+    <div class="seg-toggle" id="expenseCategoryTrendToggleRow" style="display:none; margin-bottom:14px;">
+      <button class="seg-btn" id="expenseCategoryMonthlyBtn" type="button">Monthly</button>
+      <button class="seg-btn" id="expenseCategoryQuarterlyBtn" type="button">Quarterly</button>
+      <button class="seg-btn active" id="expenseCategoryAnnualBtn" type="button">FY</button>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="expenseCategoryChartCanvas"></canvas>
+    </div>
+    <div class="card" id="expenseCategoryChartEmpty" style="display:none; box-shadow:none; border:none; text-align:center; color:var(--text-muted); padding:30px 0;">No expenses yet to chart.</div>
+  </div>
+</section>
+
+<!-- ===================== ERROR LOGS (admin-only) ===================== -->
+<section class="tab-panel" id="tab-errorLogs">
+  <div class="panel-header">
+    <h2>Error Logs</h2>
+    <button class="btn btn-secondary" id="errorLogsRefreshBtn" type="button">Refresh</button>
+  </div>
+  <div class="card">
+    <div class="table-filters">
+      <span>Clear logs older than</span>
+      <input type="number" id="errorLogsClearDays" value="30" min="1" style="width:80px;">
+      <span>days</span>
+      <button type="button" class="btn btn-danger btn-sm" id="errorLogsClearBtn">Clear Old Logs</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th class="sortable" data-sort-table="errorLogs" data-sort-key="created_at" data-sort-type="date">Timestamp</th>
+          <th class="sortable" data-sort-table="errorLogs" data-sort-key="source" data-sort-type="text">Source</th>
+          <th class="sortable" data-sort-table="errorLogs" data-sort-key="message" data-sort-type="text">Message</th>
+          <th class="sortable" data-sort-table="errorLogs" data-sort-key="probable_cause" data-sort-type="text">Probable Cause</th>
+          <th class="sortable" data-sort-table="errorLogs" data-sort-key="username" data-sort-type="text">User</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody id="errorLogsTbody"></tbody>
+    </table>
+  </div>
+</section>
+
 <!-- ===================== PRODUCT MODAL ===================== -->
 <div class="modal-overlay" id="productModal">
   <div class="modal">
@@ -425,31 +576,31 @@
         <input type="hidden" id="productId">
         <div class="form-grid">
           <div class="form-field">
-            <label>Product Name</label>
+            <label for="productName">Product Name</label>
             <input type="text" id="productName" required>
           </div>
           <div class="form-field">
-            <label>HSN Code</label>
+            <label for="productHsn">HSN Code</label>
             <input type="text" id="productHsn" required>
           </div>
           <div class="form-field span-2">
-            <label>Product Details</label>
+            <label for="productDetails">Product Details</label>
             <textarea id="productDetails"></textarea>
           </div>
           <div class="form-field">
-            <label>Packing Quantity</label>
+            <label for="productPackingQty">Packing Quantity</label>
             <input type="number" id="productPackingQty" min="0" step="any" required>
           </div>
           <div class="form-field">
-            <label>Unit / Metric</label>
+            <label for="productUnit">Unit / Metric</label>
             <select id="productUnit" required></select>
           </div>
           <div class="form-field">
-            <label>Rate (per unit)</label>
+            <label for="productRate">Rate (per unit)</label>
             <input type="number" id="productRate" min="0" step="0.01" required>
           </div>
           <div class="form-field">
-            <label>GST %</label>
+            <label for="productGst">GST %</label>
             <select id="productGst" required></select>
           </div>
         </div>
@@ -457,7 +608,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="productModal">Cancel</button>
-      <button class="btn btn-primary" id="saveProductBtn">Save Product</button>
+      <button class="btn btn-primary" id="saveProductBtn" data-mutating>Save Product</button>
     </div>
   </div>
 </div>
@@ -474,19 +625,19 @@
         <input type="hidden" id="companyId">
         <div class="form-grid">
           <div class="form-field span-2">
-            <label>Company Name</label>
+            <label for="companyName">Company Name</label>
             <input type="text" id="companyName" required>
           </div>
           <div class="form-field span-2">
-            <label>Address</label>
+            <label for="companyAddress">Address</label>
             <textarea id="companyAddress"></textarea>
           </div>
           <div class="form-field">
-            <label>GSTIN</label>
+            <label for="companyGstin">GSTIN</label>
             <input type="text" id="companyGstin" maxlength="15" placeholder="e.g. 07ABCDE1234F1Z5">
           </div>
           <div class="form-field">
-            <label>Payment Terms (days)</label>
+            <label for="companyPaymentTerms">Payment Terms (days)</label>
             <input type="number" id="companyPaymentTerms" min="0" step="1" value="30">
           </div>
           <div class="form-field span-2">
@@ -501,7 +652,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="companyModal">Cancel</button>
-      <button class="btn btn-primary" id="saveCompanyBtn">Save Company</button>
+      <button class="btn btn-primary" id="saveCompanyBtn" data-mutating>Save Company</button>
     </div>
   </div>
 </div>
@@ -525,18 +676,18 @@
         <input type="hidden" id="quotationId">
         <div class="form-grid">
           <div class="form-field">
-            <label>Company</label>
+            <label for="quotationCompany">Company</label>
             <select id="quotationCompany" required></select>
           </div>
           <div class="form-field">
-            <label>Date</label>
+            <label for="quotationDate">Date</label>
             <input type="date" id="quotationDate" required>
           </div>
         </div>
 
         <div class="form-grid" style="margin-top:14px;">
           <div class="form-field">
-            <label>Add Product</label>
+            <label for="quotationProductPicker">Add Product</label>
             <select id="quotationProductPicker"></select>
           </div>
           <div class="form-field" style="justify-content:flex-end;">
@@ -584,7 +735,7 @@
       <button class="btn btn-secondary" id="quotationEditBtn" style="display:none;">Edit</button>
       <button class="btn btn-secondary" id="quotationDownloadBtn" style="display:none;">Download PDF</button>
       <button class="btn btn-primary" id="quotationNextBtn">Next: Preview</button>
-      <button class="btn btn-primary" id="quotationConfirmBtn" style="display:none;">Confirm</button>
+      <button class="btn btn-primary" id="quotationConfirmBtn" data-mutating style="display:none;">Confirm</button>
     </div>
   </div>
 </div>
@@ -608,38 +759,38 @@
         <input type="hidden" id="invoiceId">
         <div class="form-grid">
           <div class="form-field">
-            <label>Company</label>
+            <label for="invoiceCompany">Company</label>
             <select id="invoiceCompany" required></select>
           </div>
           <div class="form-field">
-            <label>Invoice Date</label>
+            <label for="invoiceDate">Invoice Date</label>
             <input type="date" id="invoiceDate" required>
           </div>
           <div class="form-field">
-            <label>Invoice No</label>
+            <label for="invoiceNo">Invoice No</label>
             <input type="text" id="invoiceNo" required>
           </div>
           <div class="form-field">
-            <label>Challan No</label>
+            <label for="invoiceChallanNo">Challan No</label>
             <input type="text" id="invoiceChallanNo">
           </div>
           <div class="form-field">
-            <label>Challan Date</label>
+            <label for="invoiceChallanDate">Challan Date</label>
             <input type="date" id="invoiceChallanDate">
           </div>
           <div class="form-field">
-            <label>Purchase Order #</label>
+            <label for="invoicePoNumber">Purchase Order #</label>
             <input type="text" id="invoicePoNumber">
           </div>
           <div class="form-field">
-            <label>Purchase Order Date</label>
+            <label for="invoicePoDate">Purchase Order Date</label>
             <input type="date" id="invoicePoDate">
           </div>
         </div>
 
         <div class="form-grid" style="margin-top:14px;">
           <div class="form-field">
-            <label>Add Product</label>
+            <label for="invoiceProductPicker">Add Product</label>
             <select id="invoiceProductPicker"></select>
           </div>
           <div class="form-field" style="justify-content:flex-end;">
@@ -675,7 +826,7 @@
       <button class="btn btn-secondary" id="invoiceEditBtn" style="display:none;">Edit</button>
       <button class="btn btn-secondary" id="invoiceDownloadBtn" style="display:none;">Download PDF</button>
       <button class="btn btn-primary" id="invoiceNextBtn">Next: Preview</button>
-      <button class="btn btn-primary" id="invoiceConfirmBtn" style="display:none;">Confirm</button>
+      <button class="btn btn-primary" id="invoiceConfirmBtn" data-mutating style="display:none;">Confirm</button>
     </div>
   </div>
 </div>
@@ -691,22 +842,22 @@
       <input type="hidden" id="purchaseId">
       <div class="form-grid">
         <div class="form-field">
-          <label>Purchase Company</label>
+          <label for="purchaseCompany">Purchase Company</label>
           <select id="purchaseCompany" required></select>
         </div>
         <div class="form-field">
-          <label>Date</label>
+          <label for="purchaseDate">Date</label>
           <input type="date" id="purchaseDate" required>
         </div>
         <div class="form-field">
-          <label>Purchase No</label>
+          <label for="purchaseNo">Purchase No</label>
           <input type="text" id="purchaseNo" required>
         </div>
       </div>
 
       <div class="form-grid" style="margin-top:14px;">
         <div class="form-field">
-          <label>Add Product</label>
+          <label for="purchaseProductPicker">Add Product</label>
           <select id="purchaseProductPicker"></select>
         </div>
         <div class="form-field" style="justify-content:flex-end;">
@@ -731,14 +882,14 @@
           </label>
         </div>
         <div class="form-field span-2">
-          <label>Payment Details</label>
+          <label for="purchasePaymentNote">Payment Details</label>
           <input type="text" id="purchasePaymentNote" placeholder="e.g. Paid via NEFT on 12 Aug, Ref #123">
         </div>
       </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="purchaseModal">Cancel</button>
-      <button class="btn btn-primary" id="savePurchaseBtn">Save Purchase</button>
+      <button class="btn btn-primary" id="savePurchaseBtn" data-mutating>Save Purchase</button>
     </div>
   </div>
 </div>
@@ -755,19 +906,19 @@
         <input type="hidden" id="expenseId">
         <div class="form-grid">
           <div class="form-field">
-            <label>Date</label>
+            <label for="expenseDate">Date</label>
             <input type="date" id="expenseDate" required>
           </div>
           <div class="form-field">
-            <label>Category</label>
+            <label for="expenseCategory">Category</label>
             <select id="expenseCategory" required></select>
           </div>
           <div class="form-field span-2">
-            <label>Description</label>
+            <label for="expenseDescription">Description</label>
             <textarea id="expenseDescription"></textarea>
           </div>
           <div class="form-field">
-            <label>Amount</label>
+            <label for="expenseAmount">Amount</label>
             <input type="number" id="expenseAmount" min="0" step="0.01" required>
           </div>
         </div>
@@ -775,7 +926,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="expenseModal">Cancel</button>
-      <button class="btn btn-primary" id="saveExpenseBtn">Save Expense</button>
+      <button class="btn btn-primary" id="saveExpenseBtn" data-mutating>Save Expense</button>
     </div>
   </div>
 </div>
@@ -846,21 +997,21 @@
       <input type="hidden" id="configItemType">
       <input type="hidden" id="configItemId">
       <div class="form-field" id="configItemTextFieldWrap">
-        <label id="configItemFieldLabel">Name</label>
+        <label id="configItemFieldLabel" for="configItemTextValue">Name</label>
         <input type="text" id="configItemTextValue">
       </div>
       <div class="form-field" id="configItemNumberFieldWrap" style="display:none;">
-        <label>GST Rate (%)</label>
+        <label for="configItemNumberValue">GST Rate (%)</label>
         <input type="number" id="configItemNumberValue" min="0" max="100" step="0.01">
       </div>
       <div class="form-field" id="configItemTextareaFieldWrap" style="display:none;">
-        <label>Clause Text</label>
+        <label for="configItemTextareaValue">Clause Text</label>
         <textarea id="configItemTextareaValue"></textarea>
       </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="configItemModal">Cancel</button>
-      <button class="btn btn-primary" id="saveConfigItemBtn">Save</button>
+      <button class="btn btn-primary" id="saveConfigItemBtn" data-mutating>Save</button>
     </div>
   </div>
 </div>
@@ -876,19 +1027,19 @@
       <input type="hidden" id="paymentInvoiceId">
       <div class="form-grid">
         <div class="form-field">
-          <label>Invoice Total</label>
+          <label for="paymentInvoiceTotal">Invoice Total</label>
           <input type="text" id="paymentInvoiceTotal" readonly>
         </div>
         <div class="form-field">
-          <label>Amount Received *</label>
+          <label for="paymentAmountReceived">Amount Received *</label>
           <input type="number" id="paymentAmountReceived" min="0" step="0.01" required>
         </div>
         <div class="form-field">
-          <label>Payment Date *</label>
+          <label for="paymentDate">Payment Date *</label>
           <input type="date" id="paymentDate" required>
         </div>
         <div class="form-field" id="paymentShortfallWrap" style="display:none;">
-          <label>Classify Shortfall As</label>
+          <label for="paymentShortfallType">Classify Shortfall As</label>
           <select id="paymentShortfallType">
             <option value="pending">Pending Amount</option>
             <option value="tds">TDS Deducted</option>
@@ -899,7 +1050,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="paymentModal">Cancel</button>
-      <button class="btn btn-primary" id="savePaymentBtn">Save Payment</button>
+      <button class="btn btn-primary" id="savePaymentBtn" data-mutating>Save Payment</button>
     </div>
   </div>
 </div>
@@ -915,45 +1066,45 @@
       <div class="modal-body">
         <div class="form-grid">
           <div class="form-field">
-            <label>Business Name</label>
+            <label for="profName">Business Name</label>
             <input type="text" id="profName" required>
           </div>
           <div class="form-field">
-            <label>GSTIN</label>
+            <label for="profGstin">GSTIN</label>
             <input type="text" id="profGstin" maxlength="15" placeholder="e.g. 27ABCDE1234F1Z5">
           </div>
           <div class="form-field span-2">
-            <label>Address</label>
+            <label for="profAddress">Address</label>
             <textarea id="profAddress" placeholder="Shown in the PDF header and footer"></textarea>
           </div>
           <div class="form-field">
-            <label>Logo</label>
+            <label for="profLogoFile">Logo</label>
             <div class="upload-row">
               <img id="profLogoPreview" class="upload-preview" src="" alt="" style="display:none;">
               <input type="file" id="profLogoFile" accept="image/*">
             </div>
           </div>
           <div class="form-field">
-            <label>Company Seal / Stamp</label>
+            <label for="profSealFile">Company Seal / Stamp</label>
             <div class="upload-row">
               <img id="profSealPreview" class="upload-preview" src="" alt="" style="display:none;">
               <input type="file" id="profSealFile" accept="image/*">
             </div>
           </div>
           <div class="form-field">
-            <label>Bank Name</label>
+            <label for="profBankName">Bank Name</label>
             <input type="text" id="profBankName">
           </div>
           <div class="form-field">
-            <label>Account Number</label>
+            <label for="profBankAccountNo">Account Number</label>
             <input type="text" id="profBankAccountNo">
           </div>
           <div class="form-field">
-            <label>IFSC Code</label>
+            <label for="profBankIFSC">IFSC Code</label>
             <input type="text" id="profBankIFSC">
           </div>
           <div class="form-field">
-            <label>Branch</label>
+            <label for="profBankBranch">Branch</label>
             <input type="text" id="profBankBranch">
           </div>
         </div>
@@ -962,7 +1113,7 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-danger" id="clearProfileBtn">Clear All Data</button>
         <span class="spacer"></span>
-        <button type="submit" class="btn btn-primary">Save Business Profile</button>
+        <button type="submit" class="btn btn-primary" data-mutating>Save Business Profile</button>
       </div>
     </form>
   </div>
@@ -978,14 +1129,115 @@
     <div class="modal-body">
       <p>All your data (products, companies, quotations, invoices, purchases, expenses, and configuration) is stored in one real file on disk — not inside the browser.</p>
       <div class="form-field">
-        <label>Connected Folder / File</label>
+        <label for="dataFilePathText">Connected Folder / File</label>
         <input type="text" id="dataFilePathText" readonly>
       </div>
       <div class="form-hint">Browsers don't expose a file's full absolute path for privacy reasons, so only the folder name and file name are shown above.</div>
+      <div class="form-hint" id="dataFileNotConnectedHint" style="display:none;">This data was loaded directly from the server for viewing. Changes you make apply immediately, but aren't saved to a real file until you connect the Data folder below.</div>
+      <div class="form-hint" id="dataFileSupabaseHint" style="display:none;">Business data currently lives in Supabase (cloud), not a local file — connecting a folder here is optional.</div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-close="dataFileModal">Close</button>
+      <button class="btn btn-primary" id="connectFolderToSaveBtn" type="button" style="display:none;">Connect Folder to Save</button>
       <button class="btn btn-primary" id="switchDataFolderBtn" type="button">Switch Folder…</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== USER CONFIGURATION MODAL (admin-only, opened via settings icon) ===================== -->
+<div class="modal-overlay" id="userConfigModal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>User Configuration</h3>
+      <button class="modal-close" data-close="userConfigModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="card" style="margin-bottom:24px;">
+        <table>
+          <thead><tr><th>User ID</th><th>Role</th><th>Actions</th></tr></thead>
+          <tbody id="userConfigTbody"></tbody>
+        </table>
+      </div>
+
+      <div class="panel-header"><h3 style="margin:0;">Add User</h3></div>
+      <div class="form-grid">
+        <div class="form-field">
+          <label for="newUserUsername">User ID</label>
+          <input type="text" id="newUserUsername">
+        </div>
+        <div class="form-field">
+          <label for="newUserPassword">Password</label>
+          <input type="password" id="newUserPassword" autocomplete="new-password">
+        </div>
+        <div class="form-field">
+          <label>Role</label>
+          <div class="checkbox-row">
+            <label><input type="checkbox" id="newUserIsAdmin"> Admin</label>
+            <label><input type="checkbox" id="newUserIsViewer"> View Only</label>
+          </div>
+        </div>
+        <div class="form-field" style="justify-content:flex-end;">
+          <button type="button" class="btn btn-primary" id="createUserBtn">+ Add User</button>
+        </div>
+      </div>
+      <div class="form-hint">Passwords are never stored or shown in this app — they're verified by Supabase Auth on its own server. Use "Reset Password" to set a new one for an existing user.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="userConfigModal">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== RESET PASSWORD MODAL (admin-only, opened from User Configuration) ===================== -->
+<div class="modal-overlay" id="resetPasswordModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Reset Password</h3>
+      <button class="modal-close" data-close="resetPasswordModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="resetPasswordUsername">
+      <p id="resetPasswordUserLabel" class="form-hint"></p>
+      <div class="form-field">
+        <label for="resetPasswordValue">New Password</label>
+        <input type="password" id="resetPasswordValue" autocomplete="new-password">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="resetPasswordModal">Cancel</button>
+      <button class="btn btn-primary" id="confirmResetPasswordBtn" data-mutating>Reset Password</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== DB CONNECTION MODAL (admin-only, opened via settings icon) ===================== -->
+<div class="modal-overlay" id="dbConnectionModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>DB Connection</h3>
+      <button class="modal-close" data-close="dbConnectionModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-field">
+        <label for="dbConnUrl">Supabase Project URL</label>
+        <input type="text" id="dbConnUrl" placeholder="https://xxxxx.supabase.co">
+      </div>
+      <div class="form-field">
+        <label for="dbConnKey">Supabase Anon / Public API Key</label>
+        <input type="text" id="dbConnKey" placeholder="eyJhbGciOi...">
+      </div>
+      <div class="form-field">
+        <button type="button" class="btn btn-secondary" id="dbConnTestBtn">Test Connection</button>
+        <span id="dbConnTestResult" class="form-hint" style="display:block; margin-top:6px;"></span>
+      </div>
+      <div class="display-options">
+        <label><input type="checkbox" id="dbConnActive"> Use Supabase as active data source</label>
+      </div>
+      <div class="form-hint" style="margin-top:8px;">Switching sources does not automatically sync data between them — the local file will not reflect changes made while Supabase is active, and vice versa.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="dbConnectionModal">Cancel</button>
+      <button class="btn btn-primary" id="saveDbConnectionBtn">Save</button>
     </div>
   </div>
 </div>
@@ -999,7 +1251,7 @@
     </div>
     <div class="modal-body">
       <div class="form-field">
-        <label>What would you like to export?</label>
+        <label for="exportType">What would you like to export?</label>
         <select id="exportType">
           <option value="invoicesByPeriod">Invoices — Monthly / Financial Year</option>
           <option value="fySummary">Financial Year Summary (Sales, Payments, Purchases, Expenses)</option>
@@ -1016,21 +1268,21 @@
           </div>
         </div>
         <div class="form-field">
-          <label>Period</label>
+          <label for="exportPeriodValue">Period</label>
           <select id="exportPeriodValue"></select>
         </div>
       </div>
 
       <div id="exportFYFields" style="display:none;">
         <div class="form-field">
-          <label>Financial Year</label>
+          <label for="exportFYValue">Financial Year</label>
           <select id="exportFYValue"></select>
         </div>
       </div>
 
       <div id="exportCompanyFields" style="display:none;">
         <div class="form-field">
-          <label>Company</label>
+          <label for="exportCompanyId">Company</label>
           <select id="exportCompanyId"></select>
         </div>
       </div>
@@ -1044,15 +1296,19 @@
   </div>
 </div>
 
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite"></div>
 
-<!-- jsPDF + autotable (vendored locally, see js/external_*.js) -->
+<!-- jsPDF + autotable + Chart.js + SheetJS + Supabase client (vendored locally, see js/external_*.js) -->
 <script src="js/external_jspdf.umd.min.js"></script>
 <script src="js/external_jspdf.plugin.autotable.min.js"></script>
 <script src="js/external_chart.min.js"></script>
 <script src="js/external_xlsx.full.min.js"></script>
+<script src="js/external_supabase.min.js"></script>
 
+<script src="js/crypto.js"></script>
+<script src="js/errorLog.js"></script>
 <script src="js/storage.js"></script>
+<script src="js/supabaseClient.js"></script>
 <script src="js/numberToWords.js"></script>
 <script src="js/gst.js"></script>
 <script src="js/numbering.js"></script>

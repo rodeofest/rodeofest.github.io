@@ -1,5 +1,22 @@
 /* Indian financial-year detection and invoice/challan auto-increment logic. */
 
+/* Every date field in this app is a plain "YYYY-MM-DD" business-date string.
+   `new Date(str)` parses that as UTC midnight, but .getMonth()/.getDate()/
+   .toLocaleDateString() all read back in the browser's LOCAL time — for any
+   timezone behind UTC, the date can resolve to the previous calendar day,
+   silently shifting it across a financial-year or month boundary. Dormant for
+   IST (this app's home locale, ahead of UTC), real for anyone west of UTC.
+   Use this instead of `new Date(dateStr)` anywhere a date-only string needs
+   its calendar components (year/month/day) read back out — pure numeric
+   comparisons (sorting, `<`/`>`) are unaffected either way and don't need it. */
+function parseLocalDate(dateStr) {
+  if (!dateStr) return null;
+  if (typeof dateStr !== 'string') return new Date(dateStr);
+  const parts = dateStr.split('-').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return new Date(dateStr);
+  return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
 function currentFinancialYear(date) {
   date = date || new Date();
   const year = date.getFullYear();
@@ -76,6 +93,15 @@ function getNextChallanNo() {
       const seq = extractSeq(ch);
       if (seq !== null) {
         const prefix = ch.replace(/\d+\s*$/, '');
+        // Default-format challans (CH/{FY}/nnn) should reset to 001 once the
+        // financial year rolls over, same as every other numbering scheme —
+        // otherwise the sequence (and the now-stale FY tag) would just keep
+        // incrementing forever. A custom, non-default prefix is left alone and
+        // simply incremented, exactly as before.
+        const fyMatch = prefix.match(/^CH\/(\d{4}-\d{2})\/$/);
+        if (fyMatch && fyMatch[1] !== fy) {
+          return `CH/${fy}/001`;
+        }
         return `${prefix}${pad3(seq + 1)}`;
       }
     }

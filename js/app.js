@@ -3,8 +3,31 @@
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
+/* Set once runLoginGate() resolves (see the bottom of this file); { username, isAdmin, isViewer }. */
+let currentUser = null;
+
+/* Called as the first line of every handler that mutates business data — the real
+   enforcement for the view-only role (js/storage.js's writeList/writeObject throwing
+   is only a backstop for anything that forgets this guard). */
+function blockIfViewer() {
+  if (currentUser && currentUser.isViewer) { toast('View-only account — changes are disabled'); return true; }
+  return false;
+}
+
+/* Called as the second check (after blockIfViewer()) in every delete-like
+   handler — regular non-admin Users keep full add/edit access, only Delete
+   (and the equivalent "Clear All Data") is admin-only. js/storage.js's
+   assertCanDelete() is only a backstop for anything that forgets this guard. */
+function blockDeleteIfNotAdmin() {
+  if (!currentUser || !currentUser.isAdmin) { toast('Only admins can delete records'); return true; }
+  return false;
+}
+
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  // Not new Date().toISOString().slice(0,10) — that converts to UTC first, which
+  // can show yesterday's or tomorrow's date depending on the local timezone
+  // offset at the moment of the call. formatDateISO() formats local components.
+  return formatDateISO(new Date());
 }
 
 function toast(msg) {
@@ -15,8 +38,34 @@ function toast(msg) {
   toast._t = setTimeout(() => el.classList.remove('show'), 2600);
 }
 
+/* Most mutating handlers call Store.saveX()/deleteX() with no try/catch, so a
+   thrown error (the viewer/delete-restriction backstops in storage.js, or an
+   edge case in a guard like ensureEditingRecordExists) surfaces as a silent,
+   uncaught exception instead of a toast. Wrap a handler's function at its
+   addEventListener(...) call site with this instead of restructuring each
+   handler's body individually. */
+function withErrorToast(fn) {
+  return function (...args) {
+    try {
+      const result = fn.apply(this, args);
+      if (result && typeof result.catch === 'function') {
+        result.catch((e) => toast('Something went wrong: ' + (e.message || e)));
+      }
+      return result;
+    } catch (e) {
+      toast('Something went wrong: ' + (e.message || e));
+    }
+  };
+}
+
 function openModal(id) { $('#' + id).classList.add('open'); }
 function closeModal(id) { $('#' + id).classList.remove('open'); }
+
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const openOverlay = document.querySelector('.modal-overlay.open');
+  if (openOverlay) openOverlay.classList.remove('open');
+});
 
 document.addEventListener('click', (e) => {
   if (e.target.matches('[data-close]')) {
@@ -28,22 +77,106 @@ document.addEventListener('click', (e) => {
 });
 
 /* ---------------- Tabs (two-level: primary + Sales/Financials sub-navs) ---------------- */
-const tabGroups = { sales: ['quotations', 'invoices', 'payments'], financials: ['summary', 'pnl', 'gst'], charts: ['companySalesChart', 'productSalesChart', 'pendingPaymentsChart'] };
+const tabGroups = { sales: ['quotations', 'invoices', 'payments'], financials: ['summary', 'pnl', 'gst'], charts: ['companySalesChart', 'productSalesChart', 'pendingPaymentsChart', 'purchaseCompanyChart', 'expenseCategoryChart'] };
 const lastSubTab = { sales: 'quotations', financials: 'summary', charts: 'companySalesChart' };
+
+/* Always-fresh-on-tab-selection fetching (Supabase backend only —
+   Store.refreshSupabaseKeys no-ops instantly for the file backend, so this
+   list is harmless there too; it just means these tabs now also refresh on
+   every click, not only at init() and after their own CRUD actions). Every
+   tab here always refetches fresh from Supabase on every selection — there is
+   no caching/skip-if-loaded — so cross-session changes (e.g. a company added
+   or renamed in another session) show up on the very next visit to any tab
+   that reads it, not just the Company tab itself. See "Always-fresh data on
+   tab selection" in CLAUDE.md. */
+const TAB_LAZY_KEYS = {
+  products: [STORAGE_KEYS.products],
+  companies: [STORAGE_KEYS.companies],
+  quotations: [STORAGE_KEYS.quotations, STORAGE_KEYS.companies],
+  invoices: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
+  payments: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
+  /* "Cash / Manual Expenses" is a second section inside the same #tab-purchases
+     panel (see index.html), not a separate nav-activated tab — there is no
+     data-tab="expenses" button anywhere, so an 'expenses' key here would never
+     actually be requested via activateTab(). Expenses is folded into the
+     purchases entry instead, so opening/returning to the Purchase tab refreshes
+     both sections' data together. */
+  purchases: [STORAGE_KEYS.purchases, STORAGE_KEYS.companies, STORAGE_KEYS.expenses],
+  summary: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
+  pnl: [STORAGE_KEYS.invoices, STORAGE_KEYS.purchases, STORAGE_KEYS.expenses],
+  gst: [STORAGE_KEYS.invoices, STORAGE_KEYS.purchases],
+  companySalesChart: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
+  productSalesChart: [STORAGE_KEYS.invoices],
+  pendingPaymentsChart: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
+  purchaseCompanyChart: [STORAGE_KEYS.purchases, STORAGE_KEYS.companies],
+  expenseCategoryChart: [STORAGE_KEYS.expenses],
+};
+
+/* Where to show a Loading…/error placeholder while a refetch is in flight —
+   only for tabs whose render target is a simple table body or accordion div.
+   summary/pnl/gst/charts render straight into their own stat-card/canvas
+   layout once the gate resolves; a fetch failure there still surfaces via the
+   catch below's toast, it just doesn't get an in-panel placeholder first —
+   the data fetched is equally fresh either way, this is cosmetic only. */
+const TAB_LOADING_TARGET = {
+  products: { selector: '#productsTbody', colspan: 8 },
+  companies: { selector: '#companiesTbody', colspan: 6 },
+  quotations: { selector: '#quotationsTbody', colspan: 4 },
+  invoices: { selector: '#invoicesTbody', colspan: 9 },
+  purchases: { selector: '#purchasesTbody', colspan: 9 },
+  payments: { selector: '#paymentsByCompany' },
+};
+
+function showTabLoading(tabId, text) {
+  const target = TAB_LOADING_TARGET[tabId];
+  if (!target) return;
+  const el = $(target.selector);
+  if (!el) return;
+  el.innerHTML = target.colspan
+    ? `<tr class="empty-row"><td colspan="${target.colspan}">${escapeHtml(text)}</td></tr>`
+    : `<div style="text-align:center;color:var(--text-muted);padding:30px;">${escapeHtml(text)}</div>`;
+}
+
+let currentTabId = null;
 
 function groupForTab(tabId) {
   return Object.keys(tabGroups).find(g => tabGroups[g].includes(tabId)) || null;
 }
 
-function activateTab(tabId) {
+async function activateTab(tabId) {
+  if (tabId === 'errorLogs' && (!currentUser || !currentUser.isAdmin)) {
+    toast('Admins only');
+    return;
+  }
+  currentTabId = tabId;
   $$('.tab-panel').forEach(p => p.classList.remove('active'));
   $('#tab-' + tabId).classList.add('active');
+  const lazyKeys = TAB_LAZY_KEYS[tabId];
+  if (lazyKeys) {
+    showTabLoading(tabId, 'Loading…');
+    try {
+      await Store.refreshSupabaseKeys(lazyKeys);
+    } catch (e) {
+      showTabLoading(tabId, 'Could not load data: ' + (e.message || e));
+      toast('Could not load data: ' + (e.message || e));
+      return;
+    }
+  }
+  if (tabId === 'products') renderProducts();
+  if (tabId === 'companies') renderCompanies();
+  if (tabId === 'quotations') renderQuotations();
+  if (tabId === 'invoices') renderInvoices();
+  if (tabId === 'payments') renderPayments();
+  if (tabId === 'purchases') { renderPurchases(); renderPurchasesByCompany(); renderExpenses(); }
   if (tabId === 'summary') renderSummary();
   if (tabId === 'pnl') renderProfitLoss();
   if (tabId === 'gst') renderGstPayment();
   if (tabId === 'companySalesChart') renderCompanySalesChart();
   if (tabId === 'productSalesChart') renderProductSalesChart();
   if (tabId === 'pendingPaymentsChart') renderPendingPaymentsChart();
+  if (tabId === 'purchaseCompanyChart') renderPurchaseCompanyChart();
+  if (tabId === 'expenseCategoryChart') renderExpenseCategoryChart();
+  if (tabId === 'errorLogs') renderErrorLogs();
 }
 
 function setPrimaryActive(tabIdOrGroup) {
@@ -103,12 +236,17 @@ function defaultQuotationAmount(it) {
 }
 function fmtDateShort(iso) {
   if (!iso) return '';
-  return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  return parseLocalDate(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+/** Formats a Date's LOCAL calendar components as "YYYY-MM-DD" — deliberately not
+ *  .toISOString() (which converts to UTC and can shift the date by a day). */
+function formatDateISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 function addDays(iso, days) {
-  const d = new Date(iso);
+  const d = parseLocalDate(iso);
   d.setDate(d.getDate() + (Number(days) || 0));
-  return d.toISOString().slice(0, 10);
+  return formatDateISO(d);
 }
 function invoiceBalance(inv) {
   const received = inv.payment && inv.payment.received ? Number(inv.payment.amountReceived) || 0 : 0;
@@ -124,6 +262,60 @@ function expectedPaymentDate(inv) {
 function companyName(id) {
   const c = Store.getCompanies().find(c => c.id === id);
   return c ? c.name : '(unknown)';
+}
+
+/* Reprinting an already-saved quotation/invoice should show the company/business
+   details as they were at save time (billToSnapshot/profileSnapshot, set in
+   buildDocDataFromDraft), not whatever they've since been edited to — otherwise
+   correcting a customer's GSTIN or your own bank details today silently rewrites
+   what a reprint of an old, already-filed document shows. Records saved before
+   this existed have no snapshot, so they fall back to a live lookup exactly as
+   before (no change for existing data), and a snapshot is merged over — not
+   instead of — the live company so a deleted company still shows its saved name/
+   address/GSTIN rather than going blank. */
+function resolveBillToCompany(doc) {
+  const live = Store.getCompanies().find(c => c.id === doc.companyId);
+  return doc.billToSnapshot ? Object.assign({}, live, doc.billToSnapshot) : live;
+}
+
+function resolveDocProfile(doc) {
+  const live = Store.getProfile();
+  return doc.profileSnapshot ? Object.assign({}, live, doc.profileSnapshot) : live;
+}
+
+/* Narrows the window for two users generating the same auto-numbered document at
+   nearly the same time: re-fetches the freshest copy of the relevant records right
+   before a brand-new document is actually saved (a no-op on the local-file backend,
+   which has no external source to refresh from — Store.refreshSupabaseKeys() already
+   no-ops there) and, only if the number about to be saved has genuinely already been
+   taken by something saved in the meantime, swaps in a freshly-recomputed one and
+   lets the user know. Never touches a manually-typed number that doesn't actually
+   collide. Only ever called for a brand-new document — an edit-save must never
+   renumber an already-issued document. */
+async function guardAgainstNumberCollision(lazyKeys, currentNo, existingNumbers, recomputeNextNo, fieldLabel) {
+  try {
+    await Store.refreshSupabaseKeys(lazyKeys);
+  } catch (e) {
+    return currentNo; // couldn't refresh — proceed with what's already shown rather than blocking the save
+  }
+  if (!existingNumbers().includes(currentNo)) return currentNo;
+  const freshNo = recomputeNextNo();
+  toast(`${fieldLabel} "${currentNo}" was just taken by another save — renumbered to ${freshNo}.`);
+  return freshNo;
+}
+
+/* Called as the first check (after blockIfViewer()) in the Quotation/Invoice/
+   Purchase Confirm/Save handlers, before any further work. If another session
+   deletes the record being edited between the modal opening and Confirm being
+   clicked, code further down the handler (e.g. getQuotationNoForDraft(), or
+   looking up the existing invoice's payment sub-object) would otherwise throw
+   an uncaught TypeError with no user-facing message. A brand-new document
+   (falsy existingId) always passes — there's nothing to check yet. */
+function ensureEditingRecordExists(kind, existingId, list) {
+  if (!existingId) return true;
+  if (list.some(r => r.id === existingId)) return true;
+  toast('This record was deleted in another session — please close this and check the list.');
+  return false;
 }
 
 /* =====================================================================
@@ -273,7 +465,14 @@ function openProductModal(product) {
 
 $('#btnAddProduct').addEventListener('click', () => openProductModal(null));
 
-$('#saveProductBtn').addEventListener('click', () => {
+/* #productForm's Save button lives outside the <form> in .modal-footer, so it's
+   not the form's submit control — without this, pressing Enter in a field
+   triggers the browser's default (no-op action) form submission, reloading the
+   whole page and bouncing back through the login gate (persistSession:false). */
+$('#productForm').addEventListener('submit', (e) => { e.preventDefault(); $('#saveProductBtn').click(); });
+
+$('#saveProductBtn').addEventListener('click', withErrorToast(() => {
+  if (blockIfViewer()) return;
   const form = $('#productForm');
   if (!form.reportValidity()) return;
   const product = {
@@ -290,16 +489,18 @@ $('#saveProductBtn').addEventListener('click', () => {
   closeModal('productModal');
   renderProducts();
   toast('Product saved');
-});
+}));
 
-document.addEventListener('click', (e) => {
+document.addEventListener('click', withErrorToast((e) => {
   const editId = e.target.getAttribute && e.target.getAttribute('data-edit-product');
   if (editId) openProductModal(Store.getProducts().find(p => p.id === editId));
   const delId = e.target.getAttribute && e.target.getAttribute('data-delete-product');
   if (delId) {
+    if (blockIfViewer()) return;
+    if (blockDeleteIfNotAdmin()) return;
     if (confirm('Delete this product?')) { Store.deleteProduct(delId); renderProducts(); toast('Product deleted'); }
   }
-});
+}));
 
 /* =====================================================================
    COMPANY (unified sales customers + purchase vendors)
@@ -374,7 +575,11 @@ function openCompanyModal(company) {
 
 $('#btnAddCompany').addEventListener('click', () => openCompanyModal(null));
 
-$('#saveCompanyBtn').addEventListener('click', () => {
+/* Same Enter-key/page-reload fix as #productForm above — see that comment. */
+$('#companyForm').addEventListener('submit', (e) => { e.preventDefault(); $('#saveCompanyBtn').click(); });
+
+$('#saveCompanyBtn').addEventListener('click', withErrorToast(() => {
+  if (blockIfViewer()) return;
   const form = $('#companyForm');
   if (!form.reportValidity()) return;
   const company = {
@@ -392,16 +597,18 @@ $('#saveCompanyBtn').addEventListener('click', () => {
   populateCompanyDropdowns();
   populatePurchasesFilterOptions();
   toast('Company saved');
-});
+}));
 
-document.addEventListener('click', (e) => {
+document.addEventListener('click', withErrorToast((e) => {
   const editId = e.target.getAttribute && e.target.getAttribute('data-edit-company');
   if (editId) openCompanyModal(Store.getCompanies().find(c => c.id === editId));
   const delId = e.target.getAttribute && e.target.getAttribute('data-delete-company');
   if (delId) {
+    if (blockIfViewer()) return;
+    if (blockDeleteIfNotAdmin()) return;
     if (confirm('Delete this company?')) { Store.deleteCompany(delId); renderCompanies(); populateCompanyDropdowns(); populatePurchasesFilterOptions(); toast('Company deleted'); }
   }
-});
+}));
 
 /* =====================================================================
    BUSINESS PROFILE
@@ -450,8 +657,9 @@ $('#profSealFile').addEventListener('change', async (e) => {
   setImagePreview('#profSealPreview', pendingSealDataUrl);
 });
 
-$('#profileForm').addEventListener('submit', (e) => {
+$('#profileForm').addEventListener('submit', withErrorToast((e) => {
   e.preventDefault();
+  if (blockIfViewer()) return;
   const existing = Store.getProfile();
   const profile = {
     name: $('#profName').value.trim(),
@@ -468,7 +676,7 @@ $('#profileForm').addEventListener('submit', (e) => {
   loadProfileForm();
   closeModal('profileModal');
   toast('Business profile saved');
-});
+}));
 
 $('#btnOpenSettings').addEventListener('click', (e) => {
   e.stopPropagation();
@@ -479,19 +687,37 @@ $('#settingsDropdown').addEventListener('click', (e) => {
   const action = e.target.getAttribute('data-settings-action');
   if (!action) return;
   $('#settingsDropdown').classList.remove('open');
+  if (action === 'defaultConfig') {
+    renderAllConfigTables();
+    openModal('defaultConfigModal');
+    return;
+  }
+  if (!currentUser || !currentUser.isAdmin) { toast('Admins only'); return; }
   if (action === 'profile') {
     loadProfileForm();
     openModal('profileModal');
-  } else if (action === 'defaultConfig') {
-    renderAllConfigTables();
-    openModal('defaultConfigModal');
   } else if (action === 'dataFile') {
     openDataFileModal();
+  } else if (action === 'userConfig') {
+    openUserConfigModal();
+  } else if (action === 'dbConnection') {
+    openDbConnectionModal();
   }
+});
+
+$('#btnLogout').addEventListener('click', async () => {
+  try { await SupabaseClient.signOut(); } catch (e) { /* proceed to reload regardless */ }
+  location.reload();
 });
 
 function openDataFileModal() {
   $('#dataFilePathText').value = Store.dataFileLabel;
+  const connected = Store.isFolderConnected();
+  const usingSupabase = Store.getDataBackendMode() === 'supabase';
+  $('#dataFileNotConnectedHint').style.display = (!connected && !usingSupabase) ? 'block' : 'none';
+  $('#dataFileSupabaseHint').style.display = usingSupabase ? 'block' : 'none';
+  $('#connectFolderToSaveBtn').style.display = connected ? 'none' : 'inline-flex';
+  $('#switchDataFolderBtn').style.display = connected ? 'inline-flex' : 'none';
   openModal('dataFileModal');
 }
 $('#dataFileIndicator').addEventListener('click', openDataFileModal);
@@ -509,13 +735,208 @@ $('#switchDataFolderBtn').addEventListener('click', async () => {
   }
 });
 
+$('#connectFolderToSaveBtn').addEventListener('click', async () => {
+  try {
+    const connected = await Store.connectFolderToSave();
+    if (connected) {
+      closeModal('dataFileModal');
+      toast('Data folder connected — your changes are now saved to a real file.');
+    }
+  } catch (e) {
+    toast('Could not connect a data folder: ' + (e.message || e));
+  }
+});
+
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.settings-menu')) {
     $('#settingsDropdown').classList.remove('open');
   }
 });
 
-$('#clearProfileBtn').addEventListener('click', () => {
+/* ---------------- User Configuration (admin-only) ---------------- */
+/* Login credentials live only in Supabase Auth — this modal never sees or
+   stores a password, only usernames/roles via the `profiles` table. */
+async function renderUserConfigTable() {
+  const tbody = $('#userConfigTbody');
+  tbody.innerHTML = `<tr class="empty-row"><td colspan="3">Loading…</td></tr>`;
+  try {
+    const profiles = await SupabaseClient.listProfiles();
+    if (!profiles.length) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="3">No users yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = profiles.map(p => `
+      <tr>
+        <td>${escapeHtml(p.username)}</td>
+        <td>${p.isAdmin ? '<span class="badge badge-success">Admin</span>' : p.isViewer ? '<span class="badge badge-muted">Viewer</span>' : '<span class="badge badge-muted">User</span>'}</td>
+        <td class="actions-cell">
+          <button class="btn btn-secondary btn-sm" data-reset-user="${escapeHtml(p.username)}">Reset Password</button>
+          <button class="btn btn-secondary btn-sm" data-toggle-admin-user="${escapeHtml(p.username)}" data-current-admin="${p.isAdmin}">${p.isAdmin ? 'Revoke Admin' : 'Make Admin'}</button>
+          <button class="btn btn-secondary btn-sm" data-toggle-viewer-user="${escapeHtml(p.username)}" data-current-viewer="${p.isViewer}">${p.isViewer ? 'Remove Viewer' : 'Make Viewer'}</button>
+          <button class="btn btn-danger btn-sm" data-delete-user="${escapeHtml(p.username)}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">Could not load users: ${escapeHtml(e.message || String(e))}</td></tr>`;
+  }
+}
+
+async function openUserConfigModal() {
+  $('#newUserUsername').value = '';
+  $('#newUserPassword').value = '';
+  $('#newUserIsAdmin').checked = false;
+  $('#newUserIsViewer').checked = false;
+  openModal('userConfigModal');
+  await renderUserConfigTable();
+}
+
+$('#createUserBtn').addEventListener('click', async () => {
+  const username = $('#newUserUsername').value.trim();
+  const password = $('#newUserPassword').value;
+  const isAdmin = $('#newUserIsAdmin').checked;
+  const isViewer = $('#newUserIsViewer').checked;
+  if (!username || !password) { toast('User ID and password are required'); return; }
+  try {
+    await SupabaseClient.createUser(username, password, isAdmin);
+    if (isViewer && !isAdmin) await SupabaseClient.setViewerFlag(username, true);
+    $('#newUserUsername').value = '';
+    $('#newUserPassword').value = '';
+    $('#newUserIsAdmin').checked = false;
+    $('#newUserIsViewer').checked = false;
+    await renderUserConfigTable();
+    toast('User created');
+  } catch (e) {
+    toast('Could not create user: ' + (e.message || e));
+  }
+});
+
+document.addEventListener('click', async (e) => {
+  const resetUsername = e.target.getAttribute('data-reset-user');
+  const toggleUsername = e.target.getAttribute('data-toggle-admin-user');
+  const toggleViewerUsername = e.target.getAttribute('data-toggle-viewer-user');
+  const deleteUsername = e.target.getAttribute('data-delete-user');
+  if (resetUsername) {
+    $('#resetPasswordUsername').value = resetUsername;
+    $('#resetPasswordUserLabel').textContent = `Setting a new password for "${resetUsername}".`;
+    $('#resetPasswordValue').value = '';
+    openModal('resetPasswordModal');
+  } else if (toggleUsername) {
+    const currentlyAdmin = e.target.getAttribute('data-current-admin') === 'true';
+    try {
+      await SupabaseClient.setAdminFlag(toggleUsername, !currentlyAdmin);
+      await renderUserConfigTable();
+      toast('Role updated');
+    } catch (err) {
+      toast('Could not update role: ' + (err.message || err));
+    }
+  } else if (toggleViewerUsername) {
+    const currentlyViewer = e.target.getAttribute('data-current-viewer') === 'true';
+    try {
+      await SupabaseClient.setViewerFlag(toggleViewerUsername, !currentlyViewer);
+      await renderUserConfigTable();
+      toast('Role updated');
+    } catch (err) {
+      toast('Could not update role: ' + (err.message || err));
+    }
+  } else if (deleteUsername) {
+    let confirmed;
+    try { confirmed = confirm('Delete user "' + deleteUsername + '"? This cannot be undone.'); } catch (err) { return; }
+    if (!confirmed) return;
+    try {
+      await SupabaseClient.deleteUser(deleteUsername);
+      await renderUserConfigTable();
+      toast('User deleted');
+    } catch (err) {
+      toast('Could not delete user: ' + (err.message || err));
+    }
+  }
+});
+
+$('#confirmResetPasswordBtn').addEventListener('click', withErrorToast(async () => {
+  const username = $('#resetPasswordUsername').value;
+  const newPassword = $('#resetPasswordValue').value;
+  if (!newPassword) { toast('Enter a new password'); return; }
+  try {
+    await SupabaseClient.resetPassword(username, newPassword);
+    closeModal('resetPasswordModal');
+    toast('Password reset');
+  } catch (err) {
+    toast('Could not reset password: ' + (err.message || err));
+  }
+}));
+
+/* ---------------- DB Connection (admin-only) ---------------- */
+async function openDbConnectionModal() {
+  const cfg = await SecretsStore.getDbConnection();
+  $('#dbConnUrl').value = cfg.supabaseUrl;
+  $('#dbConnKey').value = cfg.supabaseAnonKey;
+  $('#dbConnActive').checked = cfg.useSupabaseActive;
+  $('#dbConnTestResult').textContent = '';
+  openModal('dbConnectionModal');
+}
+
+$('#dbConnTestBtn').addEventListener('click', async () => {
+  const url = $('#dbConnUrl').value.trim();
+  const key = $('#dbConnKey').value.trim();
+  const resultEl = $('#dbConnTestResult');
+  if (!url || !key) { resultEl.textContent = 'Enter a URL and key first.'; return; }
+  resultEl.textContent = 'Testing…';
+  const result = await Store.testSupabaseConnection(url, key);
+  resultEl.textContent = result.message;
+  resultEl.style.color = result.ok ? 'var(--success)' : 'var(--danger)';
+});
+
+$('#saveDbConnectionBtn').addEventListener('click', async () => {
+  const url = $('#dbConnUrl').value.trim();
+  const key = $('#dbConnKey').value.trim();
+  const wantsActive = $('#dbConnActive').checked;
+  const cfg = await SecretsStore.getDbConnection();
+  const wasActive = cfg.useSupabaseActive;
+
+  if (!url || !key) { toast('Project URL and anon key are required'); return; }
+
+  if (!wantsActive) {
+    await SecretsStore.saveDbConnection({ supabaseUrl: url, supabaseAnonKey: key, useSupabaseActive: false });
+    SupabaseClient.init(url, key);
+    if (wasActive) await Store.deactivateSupabaseBackend();
+    closeModal('dbConnectionModal');
+    if (wasActive) { init(); toast('Switched back to the local data file'); }
+    else toast('DB Connection saved');
+    return;
+  }
+
+  SupabaseClient.init(url, key);
+
+  if (wasActive) {
+    await SecretsStore.saveDbConnection({ supabaseUrl: url, supabaseAnonKey: key, useSupabaseActive: true });
+    closeModal('dbConnectionModal');
+    toast('DB Connection saved');
+    return;
+  }
+
+  let choice = null;
+  try {
+    if (confirm('Push your current local data to Supabase now? This overwrites whatever is currently in Supabase.\n\nClick Cancel to choose "Pull from Supabase" instead.')) {
+      choice = 'push';
+    } else if (confirm('Pull Supabase\'s existing data instead? This replaces what you see locally with whatever is already in Supabase.\n\nClick Cancel to abort and leave Supabase off.')) {
+      choice = 'pull';
+    }
+  } catch (err) { /* fall through to Cancelled below */ }
+  if (!choice) { toast('Cancelled'); return; }
+  try {
+    await Store.activateSupabaseBackend(choice);
+    closeModal('dbConnectionModal');
+    init();
+    toast('Supabase is now the active data source');
+  } catch (e) {
+    toast('Could not switch to Supabase: ' + (e.message || e));
+  }
+});
+
+$('#clearProfileBtn').addEventListener('click', withErrorToast(() => {
+  if (blockIfViewer()) return;
+  if (blockDeleteIfNotAdmin()) return;
   if (!confirm('Clear all Business Profile data, including the logo and seal? This cannot be undone.')) return;
   pendingLogoDataUrl = null;
   pendingSealDataUrl = null;
@@ -527,18 +948,33 @@ $('#clearProfileBtn').addEventListener('click', () => {
   });
   loadProfileForm();
   toast('Business profile cleared');
-});
+}));
 
 /* =====================================================================
    Shared: company dropdowns & product picker
 ===================================================================== */
-function populateCompanyDropdowns() {
+/* preserveIds ({quotation, invoice, purchase}, all optional) lets an edit handler
+   say "keep this company's id selectable even if it's no longer in the live
+   filtered list" (e.g. a company later un-flagged as Sales/Purchase, or
+   deleted) — without this, reopening such a record for edit would silently
+   leave the select on its blank default, the same fallback-injection treatment
+   populateUnitOptions()/populateGstRateOptions()/populateExpenseCategoryOptions()
+   already give their own pick-lists. */
+function populateCompanyDropdowns(preserveIds) {
+  preserveIds = preserveIds || {};
   const companies = Store.getCompanies();
-  const salesOpts = companies.filter(c => c.isSalesCompany).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
-  const purchaseOpts = companies.filter(c => c.isPurchaseCompany).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
-  $('#quotationCompany').innerHTML = `<option value="">-- Select Company --</option>` + salesOpts;
-  $('#invoiceCompany').innerHTML = `<option value="">-- Select Company --</option>` + salesOpts;
-  $('#purchaseCompany').innerHTML = `<option value="">-- Select Purchase Company --</option>` + purchaseOpts;
+  function buildSelect(selectEl, filterFn, placeholder, preserveId) {
+    let opts = companies.filter(filterFn);
+    if (preserveId && !opts.some(c => c.id === preserveId)) {
+      const existing = companies.find(c => c.id === preserveId);
+      const label = existing ? `${existing.name} (not currently listed)` : '(no longer available)';
+      opts = opts.concat([{ id: preserveId, name: label }]);
+    }
+    selectEl.innerHTML = `<option value="">${placeholder}</option>` + opts.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  }
+  buildSelect($('#quotationCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.quotation);
+  buildSelect($('#invoiceCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.invoice);
+  buildSelect($('#purchaseCompany'), c => c.isPurchaseCompany, '-- Select Purchase Company --', preserveIds.purchase);
 }
 
 function populateProductPicker(selectEl) {
@@ -703,6 +1139,7 @@ function resetQuotationModal() {
   draft.quotation = { items: [], terms: Store.getTermsTemplates().map(t => t.text) };
   $('#quotationId').value = '';
   $('#quotationDate').value = todayISO();
+  populateCompanyDropdowns();
   $('#quotationCompany').value = '';
   $('#quotationShowSubtotal').checked = false;
   $('#quotationShowTax').checked = false;
@@ -808,6 +1245,21 @@ function buildDocDataFromDraft(kind, extra) {
   const companyId = $('#' + kind + 'Company').value;
   const company = companiesStoreForKind(kind).find(c => c.id === companyId);
   const totals = draft[kind].totals || computeTotals(draft[kind].items, currentInterState(kind));
+  const snapshotFields = {};
+  if (kind !== 'purchase') {
+    // Purchases have no PDF, so there's nothing to reprint later — no snapshot needed.
+    // Frozen here (recomputed fresh on every save, including a re-save from Edit) so a
+    // later edit to the company or business profile doesn't retroactively change what a
+    // reprint of this saved document shows — see resolveBillToCompany/resolveDocProfile.
+    // Text fields only (no logo/seal) to avoid duplicating large images into every record.
+    const profile = Store.getProfile();
+    snapshotFields.billToSnapshot = company ? { name: company.name, address: company.address || '', gstin: company.gstin || '' } : null;
+    snapshotFields.profileSnapshot = {
+      name: profile.name || '', address: profile.address || '', gstin: profile.gstin || '',
+      bankName: profile.bankName || '', bankAccountNo: profile.bankAccountNo || '',
+      bankIFSC: profile.bankIFSC || '', bankBranch: profile.bankBranch || '',
+    };
+  }
   const docData = Object.assign({
     id: $('#' + kind + 'Id').value || undefined,
     companyId,
@@ -818,7 +1270,7 @@ function buildDocDataFromDraft(kind, extra) {
     sgst: totals.sgst,
     igst: totals.igst,
     total: totals.total,
-  }, extra || {});
+  }, snapshotFields, extra || {});
   return [docData, company];
 }
 
@@ -938,6 +1390,7 @@ function renderDocPreview(container, docData, company, docTitle, isInvoice) {
 
 $('#quotationNextBtn').addEventListener('click', () => {
   if (!$('#quotationCompany').value) { toast('Select a company'); return; }
+  if (!$('#quotationDate').value) { toast('Date is required'); return; }
   if (!draft.quotation.items.length) { toast('Add at least one line item'); return; }
   const [docData, company] = buildDocDataFromDraft('quotation', {
     quotationNo: getQuotationNoForDraft(),
@@ -964,15 +1417,25 @@ $('#quotationDownloadBtn').addEventListener('click', () => {
   doc.save(`${docData.quotationNo.replace(/\//g, '-')}.pdf`);
 });
 
-$('#quotationConfirmBtn').addEventListener('click', () => {
+$('#quotationConfirmBtn').addEventListener('click', withErrorToast(async () => {
+  if (blockIfViewer()) return;
+  const isNew = !$('#quotationId').value;
+  if (!ensureEditingRecordExists('quotation', $('#quotationId').value, Store.getQuotations())) return;
   const [docData] = getQuotationDraftDoc();
+  if (isNew) {
+    docData.quotationNo = await guardAgainstNumberCollision(
+      [STORAGE_KEYS.quotations], docData.quotationNo,
+      () => Store.getQuotations().map(q => q.quotationNo),
+      getNextQuotationNo, 'Quotation No'
+    );
+  }
   Store.saveQuotation(docData);
   closeModal('quotationModal');
   renderQuotations();
   toast('Quotation saved');
-});
+}));
 
-document.addEventListener('click', (e) => {
+document.addEventListener('click', withErrorToast((e) => {
   const editId = e.target.getAttribute && e.target.getAttribute('data-edit-quotation');
   if (editId) {
     const q = Store.getQuotations().find(x => x.id === editId);
@@ -980,6 +1443,7 @@ document.addEventListener('click', (e) => {
     $('#quotationId').value = q.id;
     $('#quotationDate').value = q.date;
     populateProductPicker($('#quotationProductPicker'));
+    populateCompanyDropdowns({ quotation: q.companyId });
     $('#quotationCompany').value = q.companyId;
     const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true, showAmount: false }, q.displayOptions || {});
     $('#quotationShowSubtotal').checked = opts.showSubtotal;
@@ -994,15 +1458,16 @@ document.addEventListener('click', (e) => {
   const pdfId = e.target.getAttribute && e.target.getAttribute('data-pdf-quotation');
   if (pdfId) {
     const q = Store.getQuotations().find(x => x.id === pdfId);
-    const company = Store.getCompanies().find(c => c.id === q.companyId);
-    const doc = buildQuotationPdf(q, company, Store.getProfile());
+    const doc = buildQuotationPdf(q, resolveBillToCompany(q), resolveDocProfile(q));
     doc.save(`${q.quotationNo.replace(/\//g, '-')}.pdf`);
   }
   const delId = e.target.getAttribute && e.target.getAttribute('data-delete-quotation');
   if (delId) {
+    if (blockIfViewer()) return;
+    if (blockDeleteIfNotAdmin()) return;
     if (confirm('Delete this quotation?')) { Store.deleteQuotation(delId); renderQuotations(); toast('Quotation deleted'); }
   }
-});
+}));
 
 /* =====================================================================
    INVOICES
@@ -1055,6 +1520,7 @@ function resetInvoiceModal() {
   draft.invoice = { items: [] };
   $('#invoiceId').value = '';
   $('#invoiceDate').value = todayISO();
+  populateCompanyDropdowns();
   $('#invoiceCompany').value = '';
   $('#invoiceNo').value = getNextInvoiceNo();
   $('#invoiceChallanNo').value = getNextChallanNo();
@@ -1111,6 +1577,7 @@ function getInvoiceDraftDoc() {
 
 $('#invoiceNextBtn').addEventListener('click', () => {
   if (!$('#invoiceCompany').value) { toast('Select a company'); return; }
+  if (!$('#invoiceDate').value) { toast('Invoice Date is required'); return; }
   if (!draft.invoice.items.length) { toast('Add at least one line item'); return; }
   if (!$('#invoiceNo').value.trim()) { toast('Invoice No is required'); return; }
   const [docData, company] = getInvoiceDraftDoc();
@@ -1128,12 +1595,26 @@ $('#invoiceDownloadBtn').addEventListener('click', () => {
   doc.save(`${docData.invoiceNo.replace(/\//g, '-')}.pdf`);
 });
 
-$('#invoiceConfirmBtn').addEventListener('click', () => {
+$('#invoiceConfirmBtn').addEventListener('click', withErrorToast(async () => {
+  if (blockIfViewer()) return;
   const isNew = !$('#invoiceId').value;
+  if (!ensureEditingRecordExists('invoice', $('#invoiceId').value, Store.getInvoices())) return;
   const [docData] = getInvoiceDraftDoc();
   docData.amountInWords = amountInWords(docData.total);
   if (isNew) {
     docData.payment = { received: false, amountReceived: null, paymentDate: null, shortfallType: null, shortfallAmount: 0 };
+    docData.invoiceNo = await guardAgainstNumberCollision(
+      [STORAGE_KEYS.invoices], docData.invoiceNo,
+      () => Store.getInvoices().map(i => i.invoiceNo),
+      getNextInvoiceNo, 'Invoice No'
+    );
+    if (docData.challanNo) {
+      docData.challanNo = await guardAgainstNumberCollision(
+        [STORAGE_KEYS.invoices], docData.challanNo,
+        () => Store.getInvoices().map(i => i.challanNo).filter(Boolean),
+        getNextChallanNo, 'Challan No'
+      );
+    }
   } else {
     const existing = Store.getInvoices().find(i => i.id === docData.id);
     docData.payment = existing.payment;
@@ -1143,9 +1624,9 @@ $('#invoiceConfirmBtn').addEventListener('click', () => {
   renderInvoices();
   renderPayments();
   toast('Invoice saved');
-});
+}));
 
-document.addEventListener('click', (e) => {
+document.addEventListener('click', withErrorToast((e) => {
   const editId = e.target.getAttribute && e.target.getAttribute('data-edit-invoice');
   if (editId) {
     const inv = Store.getInvoices().find(x => x.id === editId);
@@ -1161,6 +1642,7 @@ document.addEventListener('click', (e) => {
     $('#invoiceIncludeSignatory').checked = inv.includeSignatory !== false;
     $('#invoiceShowChallanDash').checked = !!inv.showChallanDash;
     populateProductPicker($('#invoiceProductPicker'));
+    populateCompanyDropdowns({ invoice: inv.companyId });
     $('#invoiceCompany').value = inv.companyId;
     renderLineItems('invoice');
     showInvoiceStep('form');
@@ -1169,15 +1651,16 @@ document.addEventListener('click', (e) => {
   const pdfId = e.target.getAttribute && e.target.getAttribute('data-pdf-invoice');
   if (pdfId) {
     const inv = Store.getInvoices().find(x => x.id === pdfId);
-    const company = Store.getCompanies().find(c => c.id === inv.companyId);
-    const doc = buildInvoicePdf(inv, company, Store.getProfile());
+    const doc = buildInvoicePdf(inv, resolveBillToCompany(inv), resolveDocProfile(inv));
     doc.save(`${inv.invoiceNo.replace(/\//g, '-')}.pdf`);
   }
   const delId = e.target.getAttribute && e.target.getAttribute('data-delete-invoice');
   if (delId) {
+    if (blockIfViewer()) return;
+    if (blockDeleteIfNotAdmin()) return;
     if (confirm('Delete this invoice?')) { Store.deleteInvoice(delId); renderInvoices(); renderPayments(); toast('Invoice deleted'); }
   }
-});
+}));
 
 /* =====================================================================
    PURCHASES
@@ -1354,23 +1837,34 @@ $('#purchaseAddLineBtn').addEventListener('click', () => {
   addLineItemToDraft('purchase', productId);
 });
 
-$('#savePurchaseBtn').addEventListener('click', () => {
+$('#savePurchaseBtn').addEventListener('click', withErrorToast(async () => {
+  if (blockIfViewer()) return;
   if (!$('#purchaseCompany').value) { toast('Select a purchase company'); return; }
+  if (!$('#purchaseDate').value) { toast('Date is required'); return; }
   if (!draft.purchase.items.length) { toast('Add at least one line item'); return; }
   if (!$('#purchaseNo').value.trim()) { toast('Purchase No is required'); return; }
+  const isNew = !$('#purchaseId').value;
+  if (!ensureEditingRecordExists('purchase', $('#purchaseId').value, Store.getPurchases())) return;
   const [docData] = buildDocDataFromDraft('purchase', {
     purchaseNo: $('#purchaseNo').value.trim(),
     paymentDone: $('#purchasePaymentDone').checked,
     paymentNote: $('#purchasePaymentNote').value.trim(),
   });
+  if (isNew) {
+    docData.purchaseNo = await guardAgainstNumberCollision(
+      [STORAGE_KEYS.purchases], docData.purchaseNo,
+      () => Store.getPurchases().map(p => p.purchaseNo),
+      getNextPurchaseNo, 'Purchase No'
+    );
+  }
   Store.savePurchase(docData);
   closeModal('purchaseModal');
   renderPurchases();
   renderPurchasesByCompany();
   toast('Purchase saved');
-});
+}));
 
-document.addEventListener('click', (e) => {
+document.addEventListener('click', withErrorToast((e) => {
   const editId = e.target.getAttribute && e.target.getAttribute('data-edit-purchase');
   if (editId) {
     const p = Store.getPurchases().find(x => x.id === editId);
@@ -1382,16 +1876,18 @@ document.addEventListener('click', (e) => {
     $('#purchasePaymentDone').checked = !!p.paymentDone;
     $('#purchasePaymentNote').value = p.paymentNote || '';
     populateProductPicker($('#purchaseProductPicker'));
-    populateCompanyDropdowns();
+    populateCompanyDropdowns({ purchase: p.companyId });
     $('#purchaseCompany').value = p.companyId;
     renderLineItems('purchase');
     openModal('purchaseModal');
   }
   const delId = e.target.getAttribute && e.target.getAttribute('data-delete-purchase');
   if (delId) {
+    if (blockIfViewer()) return;
+    if (blockDeleteIfNotAdmin()) return;
     if (confirm('Delete this purchase?')) { Store.deletePurchase(delId); renderPurchases(); renderPurchasesByCompany(); toast('Purchase deleted'); }
   }
-});
+}));
 
 /* =====================================================================
    CASH / MANUAL EXPENSES
@@ -1463,7 +1959,11 @@ function openExpenseModal(expense) {
 
 $('#btnAddExpense').addEventListener('click', () => openExpenseModal(null));
 
-$('#saveExpenseBtn').addEventListener('click', () => {
+/* Same Enter-key/page-reload fix as #productForm above — see that comment. */
+$('#expenseForm').addEventListener('submit', (e) => { e.preventDefault(); $('#saveExpenseBtn').click(); });
+
+$('#saveExpenseBtn').addEventListener('click', withErrorToast(() => {
+  if (blockIfViewer()) return;
   const form = $('#expenseForm');
   if (!form.reportValidity()) return;
   const expense = {
@@ -1477,16 +1977,18 @@ $('#saveExpenseBtn').addEventListener('click', () => {
   closeModal('expenseModal');
   renderExpenses();
   toast('Expense saved');
-});
+}));
 
-document.addEventListener('click', (e) => {
+document.addEventListener('click', withErrorToast((e) => {
   const editId = e.target.getAttribute && e.target.getAttribute('data-edit-expense');
   if (editId) openExpenseModal(Store.getExpenses().find(x => x.id === editId));
   const delId = e.target.getAttribute && e.target.getAttribute('data-delete-expense');
   if (delId) {
+    if (blockIfViewer()) return;
+    if (blockDeleteIfNotAdmin()) return;
     if (confirm('Delete this expense?')) { Store.deleteExpense(delId); renderExpenses(); toast('Expense deleted'); }
   }
-});
+}));
 
 /* =====================================================================
    DEFAULT CONFIGURATIONS (Units, GST Rates, Expense Categories, Terms & Conditions)
@@ -1564,7 +2066,8 @@ function refreshConfigConsumers(type) {
   if (type === 'expenseCategory') { populateExpenseCategoryOptions(); populateExpensesFilterOptions(); }
 }
 
-$('#saveConfigItemBtn').addEventListener('click', () => {
+$('#saveConfigItemBtn').addEventListener('click', withErrorToast(() => {
+  if (blockIfViewer()) return;
   const type = $('#configItemType').value;
   const cfg = CONFIG_TYPES[type];
   const value = cfg.fieldKind === 'text' ? $('#configItemTextValue').value.trim()
@@ -1572,21 +2075,28 @@ $('#saveConfigItemBtn').addEventListener('click', () => {
     : $('#configItemTextareaValue').value.trim();
   if (cfg.fieldKind !== 'number' && !value) { toast('Value is required'); return; }
   if (cfg.fieldKind === 'number' && !($('#configItemNumberValue').value)) { toast('Value is required'); return; }
-  const record = { id: $('#configItemId').value || undefined, [cfg.field]: value };
+  const editingId = $('#configItemId').value;
+  if (type === 'gstRate' && Store.getGstRates().some(r => r.id !== editingId && r.value === value)) {
+    toast(`A GST Rate of ${value}% already exists`);
+    return;
+  }
+  const record = { id: editingId || undefined, [cfg.field]: value };
   cfg.save(record);
   closeModal('configItemModal');
   renderConfigTable(type);
   refreshConfigConsumers(type);
   toast('Saved');
-});
+}));
 
-document.addEventListener('click', (e) => {
+document.addEventListener('click', withErrorToast((e) => {
   const addType = e.target.getAttribute && e.target.getAttribute('data-add-config');
   if (addType) openConfigModal(addType, null);
   const editType = e.target.getAttribute && e.target.getAttribute('data-edit-config-type');
   if (editType) openConfigModal(editType, e.target.getAttribute('data-edit-config-id'));
   const delType = e.target.getAttribute && e.target.getAttribute('data-delete-config-type');
   if (delType) {
+    if (blockIfViewer()) return;
+    if (blockDeleteIfNotAdmin()) return;
     const delId = e.target.getAttribute('data-delete-config-id');
     if (confirm('Delete this entry? Existing records that used it will keep their own saved value.')) {
       CONFIG_TYPES[delType].del(delId);
@@ -1595,7 +2105,7 @@ document.addEventListener('click', (e) => {
       toast('Deleted');
     }
   }
-});
+}));
 
 function populateUnitOptions(selectedValue) {
   const el = $('#productUnit');
@@ -1753,7 +2263,8 @@ $('#paymentAmountReceived').addEventListener('input', () => {
   updateShortfallVisibility(total);
 });
 
-$('#savePaymentBtn').addEventListener('click', () => {
+$('#savePaymentBtn').addEventListener('click', withErrorToast(() => {
+  if (blockIfViewer()) return;
   const invoiceId = $('#paymentInvoiceId').value;
   const inv = Store.getInvoices().find(i => i.id === invoiceId);
   const amountReceived = Number($('#paymentAmountReceived').value);
@@ -1773,7 +2284,7 @@ $('#savePaymentBtn').addEventListener('click', () => {
   renderInvoices();
   renderPayments();
   toast('Payment recorded');
-});
+}));
 
 /* =====================================================================
    SUMMARY (outstanding by company + sales over time)
@@ -1827,7 +2338,7 @@ function computeSalesByPeriod(mode) {
   const invoices = Store.getInvoices();
   const map = new Map();
   invoices.forEach(inv => {
-    const key = mode === 'annual' ? currentFinancialYear(new Date(inv.date)) : inv.date.slice(0, 7);
+    const key = mode === 'annual' ? currentFinancialYear(parseLocalDate(inv.date)) : inv.date.slice(0, 7);
     if (!map.has(key)) map.set(key, { sales: 0, received: 0, tds: 0 });
     const row = map.get(key);
     row.sales += Number(inv.total) || 0;
@@ -1899,7 +2410,7 @@ function computeProfitLossByPeriod(mode) {
     if (!map.has(key)) map.set(key, { sales: 0, purchases: 0, expenses: 0, tds: 0 });
     return map.get(key);
   }
-  const keyFor = (dateStr) => mode === 'annual' ? currentFinancialYear(new Date(dateStr)) : dateStr.slice(0, 7);
+  const keyFor = (dateStr) => mode === 'annual' ? currentFinancialYear(parseLocalDate(dateStr)) : dateStr.slice(0, 7);
   Store.getInvoices().forEach(inv => {
     const row = ensure(keyFor(inv.date));
     row.sales += Number(inv.subtotal) || 0;
@@ -1979,7 +2490,7 @@ function computeGSTByPeriod(mode) {
     if (!map.has(key)) map.set(key, { output: 0, input: 0 });
     return map.get(key);
   }
-  const keyFor = (dateStr) => mode === 'annual' ? currentFinancialYear(new Date(dateStr)) : dateStr.slice(0, 7);
+  const keyFor = (dateStr) => mode === 'annual' ? currentFinancialYear(parseLocalDate(dateStr)) : dateStr.slice(0, 7);
   Store.getInvoices().forEach(inv => {
     const row = ensure(keyFor(inv.date));
     row.output += (Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0);
@@ -2054,7 +2565,8 @@ $('#gstMonthlyBtn').addEventListener('click', () => {
 });
 
 /* =====================================================================
-   CHARTS (Charts tab: Company Sales / Product Sales / Pending Payments)
+   CHARTS (Charts tab: Company Sales / Product Sales / Pending Payments /
+   Purchases by Company / Cash-Manual Expenses)
 ===================================================================== */
 const CHART_COLORS = ['#2f6fed', '#1a9c5f', '#d9432f', '#b8860b', '#7c3aed', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#0d9488'];
 function colorForIndex(i) { return CHART_COLORS[i % CHART_COLORS.length]; }
@@ -2097,7 +2609,7 @@ function financialQuarterOf(date) {
 }
 
 function salesTrendPeriodKey(mode, dateStr) {
-  const d = new Date(dateStr);
+  const d = parseLocalDate(dateStr);
   if (mode === 'annual') {
     const fy = currentFinancialYear(d);
     return { key: fy, label: `FY ${fy}` };
@@ -2156,6 +2668,82 @@ function computeProductSalesByPeriod(mode) {
   const sortedKeys = Array.from(periodLabels.keys()).sort();
   const labels = sortedKeys.map(k => periodLabels.get(k));
   const datasets = Array.from(productTotals.entries())
+    .map(([name, perPeriod]) => ({
+      name,
+      data: sortedKeys.map(k => Math.round((perPeriod.get(k) || 0) * 100) / 100),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  return { labels, datasets };
+}
+
+/** Sums every purchase's total by company — all-time, no period filter, mirrors computeCompanySalesTotals. */
+function computePurchaseCompanyTotals() {
+  const totals = new Map(); // companyId -> total
+  Store.getPurchases().forEach(p => {
+    totals.set(p.companyId, (totals.get(p.companyId) || 0) + (Number(p.total) || 0));
+  });
+  return Array.from(totals.entries())
+    .map(([companyId, total]) => ({ name: companyName(companyId) || 'Unknown Company', value: Math.round(total * 100) / 100 }))
+    .filter(s => s.value > 0.009)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Sums every cash/manual expense's amount by category — all-time, no period filter. */
+function computeExpenseCategoryTotals() {
+  const totals = new Map(); // category -> total
+  Store.getExpenses().forEach(e => {
+    const cat = e.category || 'Uncategorized';
+    totals.set(cat, (totals.get(cat) || 0) + (Number(e.amount) || 0));
+  });
+  return Array.from(totals.entries())
+    .map(([name, total]) => ({ name, value: Math.round(total * 100) / 100 }))
+    .filter(s => s.value > 0.009)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Groups purchase totals by company and by period (mode: 'monthly' | 'quarterly' | 'annual') for the Trend bar view. */
+function computePurchaseCompanyByPeriod(mode) {
+  const periodLabels = new Map();
+  const companyTotals = new Map(); // companyId -> Map(periodKey -> total)
+
+  Store.getPurchases().forEach(p => {
+    const { key, label } = salesTrendPeriodKey(mode, p.date);
+    if (!periodLabels.has(key)) periodLabels.set(key, label);
+    if (!companyTotals.has(p.companyId)) companyTotals.set(p.companyId, new Map());
+    const perPeriod = companyTotals.get(p.companyId);
+    perPeriod.set(key, (perPeriod.get(key) || 0) + (Number(p.total) || 0));
+  });
+
+  const sortedKeys = Array.from(periodLabels.keys()).sort();
+  const labels = sortedKeys.map(k => periodLabels.get(k));
+  const datasets = Array.from(companyTotals.entries())
+    .map(([companyId, perPeriod]) => ({
+      name: companyName(companyId) || 'Unknown Company',
+      data: sortedKeys.map(k => Math.round((perPeriod.get(k) || 0) * 100) / 100),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  return { labels, datasets };
+}
+
+/** Groups expense amounts by category and by period (mode: 'monthly' | 'quarterly' | 'annual') for the Trend bar view. */
+function computeExpenseCategoryByPeriod(mode) {
+  const periodLabels = new Map();
+  const categoryTotals = new Map(); // category -> Map(periodKey -> total)
+
+  Store.getExpenses().forEach(e => {
+    const { key, label } = salesTrendPeriodKey(mode, e.date);
+    if (!periodLabels.has(key)) periodLabels.set(key, label);
+    const cat = e.category || 'Uncategorized';
+    if (!categoryTotals.has(cat)) categoryTotals.set(cat, new Map());
+    const perPeriod = categoryTotals.get(cat);
+    perPeriod.set(key, (perPeriod.get(key) || 0) + (Number(e.amount) || 0));
+  });
+
+  const sortedKeys = Array.from(periodLabels.keys()).sort();
+  const labels = sortedKeys.map(k => periodLabels.get(k));
+  const datasets = Array.from(categoryTotals.entries())
     .map(([name, perPeriod]) => ({
       name,
       data: sortedKeys.map(k => Math.round((perPeriod.get(k) || 0) * 100) / 100),
@@ -2229,18 +2817,22 @@ function renderBarChart(canvasSel, emptyElSel, prevInstance, labels, datasets) {
 }
 
 /**
- * Company Sales and Product Sales each toggle between a Breakdown pie (all-time totals, always
- * reflects every invoice regardless of date) and a Trend bar chart (Monthly/Quarterly/FY, one
- * series per company/product) — sharing this one config-driven implementation instead of two
- * near-identical copies.
+ * Company Sales, Product Sales, Purchases by Company, and Cash/Manual Expenses (by Category)
+ * each toggle between a Breakdown pie (all-time totals, always reflects every record regardless
+ * of date) and a Trend bar chart (Monthly/Quarterly/FY, one series per company/product/category)
+ * — sharing this one config-driven implementation instead of near-identical copies.
  */
 const SALES_CHARTS = {
   company: { prefix: 'companySales', computeTotals: computeCompanySalesTotals, computeByPeriod: computeCompanySalesByPeriod },
   product: { prefix: 'productSales', computeTotals: computeProductSalesTotals, computeByPeriod: computeProductSalesByPeriod },
+  purchaseCompany: { prefix: 'purchaseCompany', computeTotals: computePurchaseCompanyTotals, computeByPeriod: computePurchaseCompanyByPeriod },
+  expenseCategory: { prefix: 'expenseCategory', computeTotals: computeExpenseCategoryTotals, computeByPeriod: computeExpenseCategoryByPeriod },
 };
 const salesChartState = {
   company: { view: 'breakdown', trend: 'annual', instance: null },
   product: { view: 'breakdown', trend: 'annual', instance: null },
+  purchaseCompany: { view: 'breakdown', trend: 'annual', instance: null },
+  expenseCategory: { view: 'breakdown', trend: 'annual', instance: null },
 };
 
 function renderSalesChart(key) {
@@ -2284,9 +2876,13 @@ function wireSalesChartToggles(key) {
 }
 wireSalesChartToggles('company');
 wireSalesChartToggles('product');
+wireSalesChartToggles('purchaseCompany');
+wireSalesChartToggles('expenseCategory');
 
 function renderCompanySalesChart() { renderSalesChart('company'); }
 function renderProductSalesChart() { renderSalesChart('product'); }
+function renderPurchaseCompanyChart() { renderSalesChart('purchaseCompany'); }
+function renderExpenseCategoryChart() { renderSalesChart('expenseCategory'); }
 
 let pendingPaymentsChartInstance = null;
 function renderPendingPaymentsChart() {
@@ -2363,17 +2959,61 @@ function expenseExportRow(e) {
   };
 }
 
+/* Free-text fields (company names, payment notes, descriptions) reach exported
+ * rows unsanitized — a value starting with =/+/-/@ would otherwise export as a
+ * live formula Excel may execute on open. Prefixing with a straight quote is
+ * Excel's own "treat as text" escape and doesn't change how the value displays. */
+function sanitizeForExcel(value) {
+  return (typeof value === 'string' && /^[=+\-@]/.test(value)) ? `'${value}` : value;
+}
+
 function downloadWorkbook(sheets, filename) {
   const wb = XLSX.utils.book_new();
   sheets.forEach(({ name, rows }) => {
-    const ws = rows.length ? XLSX.utils.json_to_sheet(rows) : XLSX.utils.aoa_to_sheet([['No data for this selection']]);
+    const safeRows = rows.map(row => {
+      const safe = {};
+      Object.keys(row).forEach(k => { safe[k] = sanitizeForExcel(row[k]); });
+      return safe;
+    });
+    const ws = safeRows.length ? XLSX.utils.json_to_sheet(safeRows) : XLSX.utils.aoa_to_sheet([['No data for this selection']]);
     XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
   });
   XLSX.writeFile(wb, filename);
 }
 
+/* Triggers a browser download of a plain JS object as a formatted JSON file —
+ * used by the "Download DB Snapshot" button below. A transient <a download>
+ * + object URL is the standard no-backend way to save a file; revoked right
+ * after the click since the browser has already captured the blob by then. */
+function downloadJSON(obj, filename) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* Admin-only: pulls the freshest copy of every entity straight from Supabase
+ * (independent of dataBackendMode — works whether the app's active backend is
+ * currently 'file' or 'supabase') and downloads it as business-suite-data.json,
+ * shaped exactly like the real local data file. Lets an admin grab an
+ * up-to-date backup/inspection copy without switching the session's data
+ * source over. Hidden outright for non-admins via body.non-admin in
+ * css/style.css; this check is the backstop in case it's reached another way. */
+$('#btnDownloadDbSnapshot').addEventListener('click', withErrorToast(async () => {
+  if (!currentUser || !currentUser.isAdmin) { toast('Admins only'); return; }
+  toast('Fetching latest data from the database…');
+  const snapshot = await Store.fetchLatestDataFromSupabase();
+  downloadJSON(snapshot, 'business-suite-data.json');
+  toast('Downloaded the latest database snapshot');
+}));
+
 function invoicePeriodKey(mode, dateStr) {
-  return mode === 'annual' ? currentFinancialYear(new Date(dateStr)) : dateStr.slice(0, 7);
+  return mode === 'annual' ? currentFinancialYear(parseLocalDate(dateStr)) : dateStr.slice(0, 7);
 }
 
 function getInvoicePeriodOptions(mode) {
@@ -2386,9 +3026,9 @@ function getInvoicePeriodOptions(mode) {
 
 function getFinancialYearOptions() {
   const keys = new Set([
-    ...Store.getInvoices().map(inv => currentFinancialYear(new Date(inv.date))),
-    ...Store.getPurchases().map(p => currentFinancialYear(new Date(p.date))),
-    ...Store.getExpenses().map(e => currentFinancialYear(new Date(e.date))),
+    ...Store.getInvoices().map(inv => currentFinancialYear(parseLocalDate(inv.date))),
+    ...Store.getPurchases().map(p => currentFinancialYear(parseLocalDate(p.date))),
+    ...Store.getExpenses().map(e => currentFinancialYear(parseLocalDate(e.date))),
   ]);
   return Array.from(keys).sort().reverse();
 }
@@ -2462,7 +3102,7 @@ function exportInvoicesByPeriod(mode, key) {
 }
 
 function exportFinancialYearSummary(fy) {
-  const inFY = (dateStr) => currentFinancialYear(new Date(dateStr)) === fy;
+  const inFY = (dateStr) => currentFinancialYear(parseLocalDate(dateStr)) === fy;
   const invoices = Store.getInvoices().filter(inv => inFY(inv.date)).sort((a, b) => new Date(a.date) - new Date(b.date));
   const purchases = Store.getPurchases().filter(p => inFY(p.date)).sort((a, b) => new Date(a.date) - new Date(b.date));
   const expenses = Store.getExpenses().filter(e => inFY(e.date)).sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -2502,6 +3142,52 @@ $('#downloadExportBtn').addEventListener('click', () => {
 });
 
 /* =====================================================================
+   ERROR LOGS (Admin-only) — reads/writes go straight through ErrorLog, not
+   Store/TAB_LAZY_KEYS, since error_logs is a real per-row Supabase table,
+   independent of whichever backend (file/Supabase) holds business data.
+===================================================================== */
+async function renderErrorLogs() {
+  const tbody = $('#errorLogsTbody');
+  if (!tbody) return;
+  tbody.innerHTML = `<tr class="empty-row"><td colspan="6">Loading…</td></tr>`;
+  try {
+    let rows = await ErrorLog.fetchRecent(200);
+    if (!rows.length) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No errors logged yet.</td></tr>`;
+      return;
+    }
+    rows = sortState.errorLogs ? sortRows(rows, 'errorLogs') : rows;
+    tbody.innerHTML = rows.map(r => `
+      <tr>
+        <td>${escapeHtml(new Date(r.created_at).toLocaleString('en-IN'))}</td>
+        <td>${escapeHtml(r.source || '-')}</td>
+        <td>${escapeHtml(r.message || '-')}</td>
+        <td>${escapeHtml(r.probable_cause || '-')}</td>
+        <td>${escapeHtml(r.username || '-')}</td>
+        <td>${r.details ? `<details><summary>View</summary><pre>${escapeHtml(r.details)}</pre></details>` : '-'}</td>
+      </tr>
+    `).join('');
+    updateSortIndicators('errorLogs');
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">Could not load logs: ${escapeHtml(e.message || String(e))}</td></tr>`;
+  }
+}
+
+$('#errorLogsRefreshBtn').addEventListener('click', renderErrorLogs);
+
+$('#errorLogsClearBtn').addEventListener('click', async () => {
+  const days = Number($('#errorLogsClearDays').value) || 30;
+  if (!confirm(`Delete all logs older than ${days} day(s)? This cannot be undone.`)) return;
+  try {
+    await ErrorLog.clearOlderThan(days);
+    await renderErrorLogs();
+    toast('Old logs cleared');
+  } catch (e) {
+    toast('Could not clear logs: ' + (e.message || e));
+  }
+});
+
+/* =====================================================================
    INIT
 ===================================================================== */
 Object.assign(SORT_RENDER_FNS, {
@@ -2517,6 +3203,7 @@ Object.assign(SORT_RENDER_FNS, {
   summarySales: renderSummarySales,
   pnl: renderProfitLoss,
   gst: renderGstPayment,
+  errorLogs: renderErrorLogs,
 });
 
 function init() {
@@ -2525,18 +3212,263 @@ function init() {
   renderProducts();
   renderCompanies();
   populateCompanyDropdowns();
-  renderQuotations();
-  renderInvoices();
   populatePurchasesFilterOptions();
-  renderPurchases();
-  renderPurchasesByCompany();
   populateExpensesFilterOptions();
-  renderExpenses();
-  renderPayments();
-  renderSummary();
   populateUnitOptions();
   populateGstRateOptions($('#productGst'));
   populateExpenseCategoryOptions();
+  /* Quotations/Invoices/Purchases/Expenses/Payments/Summary no longer render
+     here unconditionally — they go through activateTab's lazy-fetch gate
+     instead (see TAB_LAZY_KEYS above), so re-render whichever tab is actually
+     showing (defaults to the hardcoded Summary landing tab on first boot). */
+  activateTab(currentTabId || 'summary');
+  updateConnectivityBanner();
 }
 
-Store.ready.then(init);
+/* Renders the header connectivity banner from Store.getConnectivityStatus() —
+   called from init() (so a fresh load shows the right state immediately) and
+   from storage.js's notifyConnectivityChanged() on every state change
+   (poll result, successful/failed persist, entering/leaving offline bypass).
+   Three mutually exclusive groups: connected-to-Supabase monitoring, the
+   pre-login offline-bypass state (with its "Log In & Sync" recovery button),
+   or plain local-file mode with neither — hidden entirely in that last case. */
+function updateConnectivityBanner() {
+  const status = Store.getConnectivityStatus();
+  const banner = $('#dbConnectivityBanner');
+  const text = $('#dbConnectivityText');
+  const syncBtn = $('#bypassLoginSyncBtn');
+  banner.classList.remove('db-connectivity-ok', 'db-connectivity-warn', 'db-connectivity-down');
+
+  if (status.mode === 'supabase') {
+    syncBtn.style.display = 'none';
+    banner.style.display = 'flex';
+    if (status.supabaseHealthy && status.pendingCount === 0) {
+      banner.classList.add('db-connectivity-ok');
+      text.textContent = 'Database connected';
+    } else if (status.supabaseHealthy && status.pendingCount > 0) {
+      banner.classList.add('db-connectivity-warn');
+      text.textContent = `Database connected — syncing ${status.pendingCount} pending change(s)…`;
+    } else if (status.pendingCount > 0) {
+      banner.classList.add('db-connectivity-down');
+      text.textContent = `Database unreachable — ${status.pendingCount} change(s) waiting to sync`;
+    } else {
+      banner.classList.add('db-connectivity-down');
+      text.textContent = 'Database unreachable';
+    }
+  } else if (status.offlineBypass) {
+    banner.style.display = 'flex';
+    banner.classList.add('db-connectivity-down');
+    syncBtn.style.display = '';
+    text.textContent = status.bypassHasUnsynced
+      ? 'Working offline — changes not yet synced to the database'
+      : 'Working offline — not connected to the database';
+  } else {
+    banner.style.display = 'none';
+    syncBtn.style.display = 'none';
+  }
+}
+
+$('#bypassLoginSyncBtn').addEventListener('click', withErrorToast(async () => {
+  await runLoginGate();
+  if (confirm('Sync your local changes made while offline up to the database now? This will overwrite the database\'s copy of any records you changed.')) {
+    await Store.activateSupabaseBackend('push');
+    Store.clearOfflineBypassMode();
+    toast('Synced — now connected to the database');
+    init();
+  } else {
+    Store.clearOfflineBypassMode();
+    toast('Logged in — you can sync later from DB Connection');
+    updateConnectivityBanner();
+  }
+}));
+
+/* ---------------- Bootstrap gates: file folder -> Supabase setup -> login -> app ---------------- */
+
+/* First run only: ask for the Supabase Project URL/anon key once, then remember them.
+   Every load after that, this just re-initializes the client from the saved config. */
+async function runSupabaseSetupGate() {
+  const cfg = await SecretsStore.getDbConnection();
+  if (cfg.supabaseUrl && cfg.supabaseAnonKey) {
+    SupabaseClient.init(cfg.supabaseUrl, cfg.supabaseAnonKey);
+    return;
+  }
+  return new Promise((resolve) => {
+    const overlay = $('#supabaseSetupGateOverlay');
+    const errorEl = $('#supabaseSetupError');
+    overlay.style.display = 'flex';
+    $('#supabaseSetupSaveBtn').addEventListener('click', async function onSave() {
+      const url = $('#supabaseSetupUrl').value.trim();
+      const key = $('#supabaseSetupKey').value.trim();
+      if (!url || !key) {
+        errorEl.textContent = 'Both fields are required.';
+        errorEl.style.display = 'block';
+        return;
+      }
+      await SecretsStore.saveDbConnection({ supabaseUrl: url, supabaseAnonKey: key, useSupabaseActive: false });
+      SupabaseClient.init(url, key);
+      overlay.style.display = 'none';
+      resolve();
+    });
+  });
+}
+
+/* Runs fresh every time it's invoked (no persisted session, by design) — real
+   password verification happens on Supabase's server via SupabaseClient.signIn.
+   The actual submit listeners are registered exactly once, below, at module
+   load — runLoginGate() itself just shows the overlay and hands out a promise
+   resolved by the next successful submit, so it's safely re-invokable. This
+   matters because "Log In & Sync" (the offline-bypass recovery action) can
+   trigger a real login a second time in the same session, not just once at boot. */
+let pendingLoginResolve = null;
+
+async function handleLoginSubmit() {
+  if (!pendingLoginResolve) return;
+  const username = $('#loginUsername').value.trim();
+  const password = $('#loginPassword').value;
+  const errorEl = $('#loginError');
+  errorEl.style.display = 'none';
+  try {
+    await SupabaseClient.signIn(username, password);
+    currentUser = await SupabaseClient.getMyProfile();
+    Store.setViewerMode(currentUser.isViewer);
+    document.body.classList.toggle('viewer-mode', !!currentUser.isViewer);
+    Store.setDeleteRestricted(!currentUser.isAdmin);
+    document.body.classList.toggle('non-admin', !currentUser.isAdmin);
+    $('#loginGateOverlay').style.display = 'none';
+    const resolve = pendingLoginResolve;
+    pendingLoginResolve = null;
+    resolve();
+  } catch (e) {
+    // The proactive runDatabaseConnectivityGate() (below) already catches a fully
+    // unreachable database before this screen even shows — this classification is
+    // for the rarer case where that check passed but the real sign-in still fails
+    // (a genuine wrong password, or an auth-layer flake right after the check).
+    errorEl.textContent = ErrorLog.guessProbableCause(e) || ('Could not log in: ' + (e.message || e));
+    errorEl.style.display = 'block';
+  }
+}
+$('#loginSubmitBtn').addEventListener('click', handleLoginSubmit);
+$('#loginPassword').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleLoginSubmit(); });
+
+async function runLoginGate() {
+  return new Promise((resolve) => {
+    $('#loginGateOverlay').style.display = 'flex';
+    pendingLoginResolve = resolve;
+  });
+}
+
+/* Proactive, one-time check at boot — before the login screen ever shows — so a
+   genuine database outage doesn't masquerade as "wrong password" (handled above
+   only for the rarer post-check failure). Never re-triggered mid-session; that's
+   the separate, ongoing connectivity banner (updateConnectivityBanner()) instead.
+   Resolves true only if the user explicitly chose to bypass login and work
+   offline; false if connectivity is fine (or was restored via Retry). */
+async function runDatabaseConnectivityGate() {
+  if (!SupabaseClient.isInitialized()) return false;
+  const cfg = await SecretsStore.getDbConnection();
+  // The file-gate overlay is still up at this point (app.js's bootstrap chain
+  // hasn't called hideGate() yet — see the bottom of this file), so give this
+  // wait its own accurate heading instead of leaving the stale "Connect Your
+  // Data Folder" / "Loading…" text showing while the connectivity check is
+  // in flight. Message cleared since the heading alone says it all here.
+  showGate('', false, 'Checking Database Connection');
+  const result = await Store.testSupabaseConnection(cfg.supabaseUrl, cfg.supabaseAnonKey);
+  if (result.ok) return false;
+
+  return new Promise((resolve) => {
+    const overlay = $('#dbConnectivityGateOverlay');
+    overlay.style.display = 'flex';
+    $('#dbConnectivityRetryBtn').addEventListener('click', async () => {
+      // Hide this failure card and let the always-on file-gate overlay underneath
+      // (lower z-index, never actually dismissed until the whole bootstrap chain
+      // finishes) show the same "Checking Database Connection" state the initial
+      // check used — so a retry gives the same visible feedback instead of the
+      // button just sitting there silently during the network round-trip.
+      overlay.style.display = 'none';
+      showGate('', false, 'Checking Database Connection');
+      const retryResult = await Store.testSupabaseConnection(cfg.supabaseUrl, cfg.supabaseAnonKey);
+      if (retryResult.ok) {
+        resolve(false);
+      } else {
+        overlay.style.display = 'flex';
+        toast('Still could not reach the database.');
+      }
+    });
+    $('#dbConnectivityLoadFileBtn').addEventListener('click', () => {
+      overlay.style.display = 'none';
+      resolve(true);
+    });
+  });
+}
+
+/* If Supabase was left active last session, resume it silently (pull fresh from
+   Supabase rather than re-prompting) so the pilot state survives a reload. If it
+   wasn't active but is configured, ping it in the background so connection
+   problems surface early without blocking the app. A resume failure while the
+   Database flag is on must never silently fall through to anything (previously
+   it silently degraded to the browser's own localStorage) — the user is asked
+   explicitly via runSupabaseResumeFailedGate() instead. */
+async function resumeActiveSupabaseBackend() {
+  try {
+    const cfg = await SecretsStore.getDbConnection();
+    if (cfg.useSupabaseActive && SupabaseClient.isInitialized()) {
+      await Store.activateSupabaseBackend('pull');
+    } else if (cfg.supabaseUrl && cfg.supabaseAnonKey) {
+      Store.testSupabaseConnection(cfg.supabaseUrl, cfg.supabaseAnonKey).catch(() => {});
+    }
+  } catch (e) {
+    console.error('Could not resume the Supabase data backend.', e);
+    ErrorLog.record('Could not resume the Supabase data backend', e, { source: 'resumeActiveSupabaseBackend' });
+    await runSupabaseResumeFailedGate();
+  }
+}
+
+/* Blocks until the user picks Retry (re-attempts the Supabase pull, and can be
+   clicked again on repeated failure) or Use Local Data File Instead (a
+   session-only fallback via Store.recoverToLocalFileAfterSupabaseFailure() —
+   the saved useSupabaseActive flag is untouched, so Supabase is tried again on
+   the next reload). Reuses the same .file-gate-overlay/.file-gate-card pattern
+   as the other three bootstrap gates. */
+async function runSupabaseResumeFailedGate() {
+  return new Promise((resolve) => {
+    const overlay = $('#supabaseResumeFailedOverlay');
+    overlay.style.display = 'flex';
+    $('#supabaseResumeRetryBtn').addEventListener('click', async () => {
+      try {
+        await Store.activateSupabaseBackend('pull');
+        overlay.style.display = 'none';
+        resolve();
+      } catch (e) {
+        ErrorLog.record('Retry: could not resume the Supabase data backend', e, { source: 'resumeActiveSupabaseBackend.retry' });
+        toast('Still could not reach Supabase.');
+      }
+    });
+    $('#supabaseResumeUseLocalBtn').addEventListener('click', async () => {
+      await Store.recoverToLocalFileAfterSupabaseFailure();
+      overlay.style.display = 'none';
+      resolve();
+    });
+  });
+}
+
+Store.ready
+  .then(runSupabaseSetupGate)
+  .then(async () => {
+    const bypassed = await runDatabaseConnectivityGate();
+    if (bypassed) {
+      await Store.enterOfflineBypassMode();
+      return; // skip login + resumeActiveSupabaseBackend entirely for this session
+    }
+    await runLoginGate();
+    await resumeActiveSupabaseBackend();
+  })
+  .then(() => {
+    // The file-gate overlay (repurposed as a generic "Loading…" cover once its
+    // own job is done — see storage.js's bootstrapDataSource/initFileStorage)
+    // has been up continuously since first paint, so the specific gates above
+    // (Setup/Connectivity/Login/Resume-failed) always render on top of *something*
+    // rather than a flash of unrendered app content. Only now, once the whole
+    // chain is genuinely done, do we dismiss it and reveal the real app.
+    hideGate();
+    init();
+  });

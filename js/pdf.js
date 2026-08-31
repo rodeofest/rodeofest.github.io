@@ -27,6 +27,13 @@ function imageFormatFromDataUrl(dataUrl) {
   return 'PNG';
 }
 
+/* Business Profile's Logo Width/Height fields are entered in px (the unit
+   users think in for on-screen images); jsPDF works in mm. Standard 96dpi
+   CSS-px assumption, matching how browsers report image/element sizes. */
+function pxToMm(px) {
+  return px * 25.4 / 96;
+}
+
 function drawHeader(doc, profile, company, opts) {
   opts = Object.assign({
     docTitle: '', docNo: '', docDate: '',
@@ -36,13 +43,17 @@ function drawHeader(doc, profile, company, opts) {
   let y = 16;
   const pageWidth = doc.internal.pageSize.getWidth();
 
+  const DEFAULT_LOGO_MM = 24;
+  const logoWidthMm = profile.logoWidthPx ? pxToMm(Number(profile.logoWidthPx)) : DEFAULT_LOGO_MM;
+  const logoHeightMm = profile.logoHeightPx ? pxToMm(Number(profile.logoHeightPx)) : DEFAULT_LOGO_MM;
+
   if (profile.logoDataUrl) {
     try {
-      doc.addImage(profile.logoDataUrl, imageFormatFromDataUrl(profile.logoDataUrl), PAGE_MARGIN, 10, 24, 24);
+      doc.addImage(profile.logoDataUrl, imageFormatFromDataUrl(profile.logoDataUrl), PAGE_MARGIN, 10, logoWidthMm, logoHeightMm);
     } catch (e) { /* ignore unreadable image */ }
   }
 
-  const textX = profile.logoDataUrl ? PAGE_MARGIN + 30 : PAGE_MARGIN;
+  const textX = profile.logoDataUrl ? PAGE_MARGIN + logoWidthMm + 6 : PAGE_MARGIN;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
   doc.text(profile.name || 'Your Business Name', textX, y);
@@ -109,6 +120,10 @@ function drawFooter(doc, profile) {
   const pageCount = doc.internal.getNumberOfPages();
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
+  const addr = (profile.footerText && profile.footerText.trim())
+    ? profile.footerText.trim()
+    : [profile.name, profile.address].filter(Boolean).join(' | ');
+  const footerLines = doc.splitTextToSize(addr, pageWidth - PAGE_MARGIN * 2 - 40);
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i);
     doc.setDrawColor(200);
@@ -116,8 +131,7 @@ function drawFooter(doc, profile) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(110);
-    const addr = [profile.name, profile.address].filter(Boolean).join(' | ');
-    doc.text(addr, pageWidth / 2, pageHeight - 11, { align: 'center' });
+    doc.text(footerLines, pageWidth / 2, pageHeight - 11, { align: 'center' });
     doc.text(`Page ${i} of ${pageCount}`, pageWidth - PAGE_MARGIN, pageHeight - 11, { align: 'right' });
     doc.setTextColor(0);
   }
@@ -155,8 +169,8 @@ function buildInvoiceItemRows(items) {
       productCell,
       it.hsnCode || '',
       String(it.qty),
-      it.unit || '',
       fmtMoney(it.rate),
+      it.unit || '',
       `${it.gstPercent || 0}%`,
       fmtMoney(tax),
       fmtMoney(taxable + tax),
@@ -165,7 +179,7 @@ function buildInvoiceItemRows(items) {
 }
 
 function drawTotalsBlock(doc, startY, totals, displayOptions) {
-  const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true }, displayOptions || {});
+  const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true, advanceAmount: null }, displayOptions || {});
   const pageWidth = doc.internal.pageSize.getWidth();
   const labelX = pageWidth - PAGE_MARGIN - 60;
   const valueX = pageWidth - PAGE_MARGIN;
@@ -189,6 +203,18 @@ function drawTotalsBlock(doc, startY, totals, displayOptions) {
     doc.text('Grand Total', labelX, y + 1);
     doc.text(fmtMoney(totals.total), valueX, y + 1, { align: 'right' });
     y += 8;
+  }
+  if (opts.advanceAmount != null) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text('Less: Advance Received', labelX, y);
+    doc.text(fmtMoney(opts.advanceAmount), valueX, y, { align: 'right' });
+    y += 5;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('Balance Due', labelX, y);
+    doc.text(fmtMoney(totals.total - opts.advanceAmount), valueX, y, { align: 'right' });
+    y += 7;
   }
   return y;
 }
@@ -218,6 +244,7 @@ function buildQuotationPdf(quotation, company, profile) {
     margin: { left: PAGE_MARGIN, right: PAGE_MARGIN },
     styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
     headStyles: { fillColor: [40, 55, 90] },
+    bodyStyles: { fontSize: 9, textColor: [0, 0, 0] },
     columnStyles: { 0: { cellWidth: 8 }, 1: { cellWidth: 52 } },
   });
 
@@ -250,7 +277,7 @@ function buildInvoicePdf(invoice, company, profile) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
   const tableStartY = drawHeader(doc, profile, company, {
-    docTitle: 'TAX INVOICE',
+    docTitle: invoice.isProforma ? 'PROFORMA INVOICE' : 'TAX INVOICE',
     docNo: invoice.invoiceNo,
     docDate: invoice.date,
     noLabel: 'Invoice No:',
@@ -268,16 +295,19 @@ function buildInvoicePdf(invoice, company, profile) {
 
   doc.autoTable({
     startY: tableStartY,
-    head: [['#', 'Product', 'HSN', 'Qty', 'Per', 'Rate', 'GST%', 'Tax', 'Amount']],
+    head: [['#', 'Product', 'HSN', 'Qty', 'Rate', 'Per', 'GST%', 'Tax', 'Amount']],
     body: buildInvoiceItemRows(invoice.items),
     margin: { left: PAGE_MARGIN, right: PAGE_MARGIN },
     styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
     headStyles: { fillColor: [40, 55, 90] },
+    bodyStyles: { fontSize: 9, textColor: [0, 0, 0] },
     columnStyles: { 0: { cellWidth: 8 }, 1: { cellWidth: 52 } },
   });
 
   let y = doc.lastAutoTable.finalY + 8;
-  y = drawTotalsBlock(doc, y, invoice);
+  y = drawTotalsBlock(doc, y, invoice, {
+    advanceAmount: invoice.isAdvancePayment ? (Number(invoice.advanceAmount) || 0) : null,
+  });
 
   doc.setFont('helvetica', 'italic');
   doc.setFontSize(9);

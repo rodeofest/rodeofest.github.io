@@ -13,6 +13,7 @@ const STORAGE_KEYS = {
   gstRates: 'qb_gstRates',
   expenseCategories: 'qb_expenseCategories',
   termsTemplates: 'qb_termsTemplates',
+  tabLayout: 'qb_tabLayout',
 };
 
 function uid() {
@@ -166,11 +167,21 @@ const Store = {
     return readObject(STORAGE_KEYS.profile, {
       name: '', address: '', gstin: '', logoDataUrl: '',
       bankName: '', bankAccountNo: '', bankIFSC: '', bankBranch: '', sealDataUrl: '',
+      footerText: '', logoWidthPx: null, logoHeightPx: null,
     });
   },
   saveProfile(profile) {
     writeObject(STORAGE_KEYS.profile, profile);
     return profile;
+  },
+
+  // Tab layout (singleton) — which primary nav tabs are visible to non-admins, and their order
+  getTabLayout() {
+    return readObject(STORAGE_KEYS.tabLayout, { order: ['financials', 'sales', 'purchases', 'products', 'companies', 'charts'], hidden: [] });
+  },
+  saveTabLayout(layout) {
+    writeObject(STORAGE_KEYS.tabLayout, layout);
+    return layout;
   },
 
   // Quotations
@@ -462,7 +473,7 @@ function collectLocalStorageSnapshot() {
   Object.values(STORAGE_KEYS).forEach((key) => {
     if (key === STORAGE_KEYS.purchaseCompanies) return;
     const raw = localStorage.getItem(key);
-    snapshot[key] = raw ? JSON.parse(raw) : (key === STORAGE_KEYS.profile ? null : []);
+    snapshot[key] = raw ? JSON.parse(raw) : ((key === STORAGE_KEYS.profile || key === STORAGE_KEYS.tabLayout) ? null : []);
   });
   return snapshot;
 }
@@ -1022,9 +1033,72 @@ Store.fetchLatestDataFromSupabase = async function fetchLatestDataFromSupabase()
   const map = await fetchSupabaseKeysBatch(ALL_BUSINESS_DATA_KEYS);
   const snapshot = {};
   ALL_BUSINESS_DATA_KEYS.forEach((key) => {
-    snapshot[key] = map[key] !== undefined ? map[key] : (key === STORAGE_KEYS.profile ? null : []);
+    snapshot[key] = map[key] !== undefined ? map[key] : ((key === STORAGE_KEYS.profile || key === STORAGE_KEYS.tabLayout) ? null : []);
   });
   return snapshot;
+};
+
+/** Field-level diff between two records (plain objects) — every key present on
+ *  either side is compared by JSON-stringified equality, so nested objects/arrays
+ *  (line items, snapshots, payment sub-objects) are reported as a single
+ *  before/after blob rather than being recursively diffed themselves. Used by
+ *  Store.computeSyncDiff below to power the "Sync to DB" review screen. */
+function diffRecordFields(oldRec, newRec) {
+  const keys = new Set([...(oldRec ? Object.keys(oldRec) : []), ...(newRec ? Object.keys(newRec) : [])]);
+  const changes = [];
+  keys.forEach((k) => {
+    const ov = oldRec ? oldRec[k] : undefined;
+    const nv = newRec ? newRec[k] : undefined;
+    if (JSON.stringify(ov) !== JSON.stringify(nv)) changes.push({ field: k, oldValue: ov, newValue: nv });
+  });
+  return changes;
+}
+
+/* Powers the admin "Sync to DB" button (js/app.js) — computes what pushing the
+   current local data would change in Supabase, so the admin can review before
+   committing. Deliberately independent of dataBackendMode, mirroring
+   Store.fetchLatestDataFromSupabase/pushAllBusinessDataToSupabase's existing
+   "always compare against fileData || collectLocalStorageSnapshot()" behavior.
+   Returns { [key]: {type:'object', changes} } for the profile singleton, or
+   { [key]: {type:'list', added, changed, removed} } for every other key —
+   `changed` entries carry both the record and its own diffRecordFields() output
+   so the review screen can show exactly which fields differ, not just counts. */
+Store.computeSyncDiff = async function computeSyncDiff() {
+  const remote = await Store.fetchLatestDataFromSupabase();
+  const local = fileData || collectLocalStorageSnapshot();
+  const result = {};
+  ALL_BUSINESS_DATA_KEYS.forEach((key) => {
+    const localVal = local[key];
+    const remoteVal = remote[key];
+    if (key === STORAGE_KEYS.profile || key === STORAGE_KEYS.tabLayout) {
+      result[key] = { type: 'object', changes: diffRecordFields(remoteVal || {}, localVal || {}) };
+    } else {
+      const oldList = Array.isArray(remoteVal) ? remoteVal : [];
+      const newList = Array.isArray(localVal) ? localVal : [];
+      const oldById = new Map(oldList.map(r => [r.id, r]));
+      const newById = new Map(newList.map(r => [r.id, r]));
+      const added = newList.filter(r => !oldById.has(r.id));
+      const removed = oldList.filter(r => !newById.has(r.id));
+      const changed = [];
+      newList.forEach((r) => {
+        const old = oldById.get(r.id);
+        if (old) {
+          const changes = diffRecordFields(old, r);
+          if (changes.length) changed.push({ record: r, changes });
+        }
+      });
+      result[key] = { type: 'list', added, changed, removed };
+    }
+  });
+  return result;
+};
+
+/* Commits the "Sync to DB" push after the admin has reviewed computeSyncDiff's
+   output. Deliberately calls the private pushAllBusinessDataToSupabase()
+   directly rather than Store.activateSupabaseBackend('push') — that also flips
+   dataBackendMode/useSupabaseActive, which a one-off sync must not do. */
+Store.syncPushToSupabase = async function syncPushToSupabase() {
+  return pushAllBusinessDataToSupabase();
 };
 
 Store.getDataBackendMode = function getDataBackendMode() { return dataBackendMode; };

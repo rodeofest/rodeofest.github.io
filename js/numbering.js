@@ -50,6 +50,20 @@ function getNextInvoiceNo() {
   return `${prefix}${pad3(maxSeq + 1)}`;
 }
 
+/** Next Proforma Invoice number for the current FY — same "scan for highest existing" pattern as getNextInvoiceNo, scoped to the PI/ prefix so it never collides with real (INV/) invoice numbers. */
+function getNextProformaInvoiceNo() {
+  const fy = currentFinancialYear();
+  const prefix = `PI/${fy}/`;
+  let maxSeq = 0;
+  Store.getInvoices().forEach(inv => {
+    if (inv.invoiceNo && inv.invoiceNo.startsWith(prefix)) {
+      const seq = extractSeq(inv.invoiceNo);
+      if (seq !== null && seq > maxSeq) maxSeq = seq;
+    }
+  });
+  return `${prefix}${pad3(maxSeq + 1)}`;
+}
+
 /** Next quotation number, derived the same way from the highest existing quotation number. */
 function getNextQuotationNo() {
   const prefix = 'QTN-';

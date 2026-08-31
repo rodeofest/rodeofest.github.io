@@ -80,6 +80,51 @@ document.addEventListener('click', (e) => {
 const tabGroups = { sales: ['quotations', 'invoices', 'payments'], financials: ['summary', 'pnl', 'gst'], charts: ['companySalesChart', 'productSalesChart', 'pendingPaymentsChart', 'purchaseCompanyChart', 'expenseCategoryChart'] };
 const lastSubTab = { sales: 'quotations', financials: 'summary', charts: 'companySalesChart' };
 
+/* Admin-configurable tab layout (Settings > Tab Layout) — which of the 6
+   primary nav tabs are visible/in what order. Error Logs is deliberately
+   excluded: it keeps its own existing hardcoded admin-only visibility
+   (see activateTab() below) and is always pinned last in the nav. */
+const PRIMARY_NAV_DEFAULT_ORDER = ['financials', 'sales', 'purchases', 'products', 'companies', 'charts'];
+const PRIMARY_NAV_LABELS = { financials: 'Financials', sales: 'Sales', purchases: 'Purchase', products: 'Products', companies: 'Company', charts: 'Charts' };
+
+function normalizeTabOrder(savedOrder) {
+  const valid = (savedOrder || []).filter((id) => PRIMARY_NAV_DEFAULT_ORDER.includes(id));
+  const missing = PRIMARY_NAV_DEFAULT_ORDER.filter((id) => !valid.includes(id));
+  return [...valid, ...missing]; // forward-compat: a future new tab not yet in a saved config just appends at the end
+}
+
+function primaryNavButtonEl(id) {
+  return $(`.tabs-primary .tab-btn[data-group="${id}"]`) || $(`.tabs-primary .tab-btn[data-tab="${id}"]`);
+}
+
+/* Reorders the actual primary-nav <button> DOM elements and applies hide state.
+   Reorder applies to everyone (including admins); hide only applies to
+   non-admins — admins always see every tab so they can never lock themselves
+   out of Settings. */
+function applyTabLayout() {
+  const layout = Store.getTabLayout();
+  const order = normalizeTabOrder(layout.order);
+  const nav = $('.tabs-primary');
+  order.forEach((id) => { const btn = primaryNavButtonEl(id); if (btn) nav.appendChild(btn); });
+  const errBtn = $('#navErrorLogs');
+  if (errBtn) nav.appendChild(errBtn); // always pinned last, unaffected by config
+  const hidden = (currentUser && currentUser.isAdmin) ? [] : (layout.hidden || []);
+  order.forEach((id) => {
+    const btn = primaryNavButtonEl(id);
+    if (btn) btn.style.display = hidden.includes(id) ? 'none' : '';
+  });
+}
+
+/* First-load landing tab: the hardcoded 'summary' default breaks if Financials
+   is hidden for the current (non-admin) user, so pick the first visible tab instead. */
+function getDefaultLandingTabId() {
+  const layout = Store.getTabLayout();
+  const hidden = (currentUser && currentUser.isAdmin) ? [] : (layout.hidden || []);
+  const order = normalizeTabOrder(layout.order);
+  const firstVisible = order.find((id) => !hidden.includes(id)) || 'financials';
+  return tabGroups[firstVisible] ? lastSubTab[firstVisible] : firstVisible;
+}
+
 /* Always-fresh-on-tab-selection fetching (Supabase backend only —
    Store.refreshSupabaseKeys no-ops instantly for the file backend, so this
    list is harmless there too; it just means these tabs now also refresh on
@@ -248,6 +293,11 @@ function addDays(iso, days) {
   d.setDate(d.getDate() + (Number(days) || 0));
   return formatDateISO(d);
 }
+/** Every real (non-Proforma) invoice — Proforma Invoices carry no GST liability and are excluded from all financial reporting/aggregates (Sales, GST Payment, Profit & Loss, Payments, Outstanding, Charts, Excel exports). */
+function realInvoices() {
+  return Store.getInvoices().filter(inv => !inv.isProforma);
+}
+
 function invoiceBalance(inv) {
   const received = inv.payment && inv.payment.received ? Number(inv.payment.amountReceived) || 0 : 0;
   const tdsSettled = inv.payment && inv.payment.received && inv.payment.shortfallType === 'tds' ? Number(inv.payment.shortfallAmount) || 0 : 0;
@@ -618,14 +668,30 @@ function loadProfileForm() {
   $('#profName').value = p.name || '';
   $('#profGstin').value = p.gstin || '';
   $('#profAddress').value = p.address || '';
+  $('#profFooterText').value = p.footerText || '';
+  $('#profLogoWidthPx').value = p.logoWidthPx || '';
+  $('#profLogoHeightPx').value = p.logoHeightPx || '';
   $('#profBankName').value = p.bankName || '';
   $('#profBankAccountNo').value = p.bankAccountNo || '';
   $('#profBankIFSC').value = p.bankIFSC || '';
   $('#profBankBranch').value = p.bankBranch || '';
   setImagePreview('#profLogoPreview', p.logoDataUrl);
   setImagePreview('#profSealPreview', p.sealDataUrl);
-  $('#topbarBizName').textContent = p.name ? `${p.name} — Quotations & Invoicing` : 'Set up your Business Profile to get started';
+  $('#appTitleHeading').textContent = p.name || 'Business Suite';
+  document.title = p.name ? `${p.name} — Quotations & Invoicing` : 'Business Suite — Quotations & Invoicing';
+  $('#topbarBizName').textContent = p.name ? 'Quotations & Invoicing' : 'Set up your Business Profile to get started';
+  $$('#profileModal .accordion-header').forEach((header) => {
+    header.classList.remove('expanded');
+    header.nextElementSibling.style.display = 'none';
+  });
 }
+
+$$('#profileModal .accordion-header').forEach((header) => {
+  header.addEventListener('click', () => {
+    const expanded = header.classList.toggle('expanded');
+    header.nextElementSibling.style.display = expanded ? '' : 'none';
+  });
+});
 
 function setImagePreview(sel, dataUrl) {
   const img = $(sel);
@@ -665,6 +731,9 @@ $('#profileForm').addEventListener('submit', withErrorToast((e) => {
     name: $('#profName').value.trim(),
     gstin: $('#profGstin').value.trim().toUpperCase(),
     address: $('#profAddress').value.trim(),
+    footerText: $('#profFooterText').value.trim(),
+    logoWidthPx: Number($('#profLogoWidthPx').value) || null,
+    logoHeightPx: Number($('#profLogoHeightPx').value) || null,
     bankName: $('#profBankName').value.trim(),
     bankAccountNo: $('#profBankAccountNo').value.trim(),
     bankIFSC: $('#profBankIFSC').value.trim().toUpperCase(),
@@ -692,6 +761,7 @@ $('#settingsDropdown').addEventListener('click', (e) => {
     openModal('defaultConfigModal');
     return;
   }
+  if (action === 'syncToDb' || action === 'downloadDbSnapshot') return; // handled by their own dedicated listeners below
   if (!currentUser || !currentUser.isAdmin) { toast('Admins only'); return; }
   if (action === 'profile') {
     loadProfileForm();
@@ -702,6 +772,8 @@ $('#settingsDropdown').addEventListener('click', (e) => {
     openUserConfigModal();
   } else if (action === 'dbConnection') {
     openDbConnectionModal();
+  } else if (action === 'tabLayout') {
+    openTabLayoutModal();
   }
 });
 
@@ -709,6 +781,65 @@ $('#btnLogout').addEventListener('click', async () => {
   try { await SupabaseClient.signOut(); } catch (e) { /* proceed to reload regardless */ }
   location.reload();
 });
+
+/* Settings > Tab Layout (admin-only) — lets an admin choose which of the 6
+   configurable primary nav tabs regular Users/Viewers can see, and reorder
+   them. Edits happen on a local draft object; nothing is persisted until
+   "Save Tab Layout" is clicked. See PRIMARY_NAV_DEFAULT_ORDER/applyTabLayout
+   above. */
+let tabLayoutDraft = null;
+
+function renderTabLayoutRows() {
+  const tbody = $('#tabLayoutBody');
+  tbody.innerHTML = tabLayoutDraft.order.map((id, idx) => `
+    <tr data-layout-id="${id}">
+      <td>
+        <button type="button" class="btn-icon" data-move="up" data-id="${id}" ${idx === 0 ? 'disabled' : ''}>&#9650;</button>
+        <button type="button" class="btn-icon" data-move="down" data-id="${id}" ${idx === tabLayoutDraft.order.length - 1 ? 'disabled' : ''}>&#9660;</button>
+      </td>
+      <td>${PRIMARY_NAV_LABELS[id]}</td>
+      <td><label><input type="checkbox" data-visible-toggle data-id="${id}" ${tabLayoutDraft.hidden.includes(id) ? '' : 'checked'}> Visible</label></td>
+    </tr>`).join('');
+}
+
+function openTabLayoutModal() {
+  const saved = Store.getTabLayout();
+  tabLayoutDraft = { order: normalizeTabOrder(saved.order), hidden: (saved.hidden || []).slice() };
+  renderTabLayoutRows();
+  openModal('tabLayoutModal');
+}
+
+$('#tabLayoutBody').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-move]');
+  if (!btn) return;
+  const id = btn.getAttribute('data-id');
+  const i = tabLayoutDraft.order.indexOf(id);
+  const j = btn.getAttribute('data-move') === 'up' ? i - 1 : i + 1;
+  if (j < 0 || j >= tabLayoutDraft.order.length) return;
+  [tabLayoutDraft.order[i], tabLayoutDraft.order[j]] = [tabLayoutDraft.order[j], tabLayoutDraft.order[i]];
+  renderTabLayoutRows();
+});
+
+$('#tabLayoutBody').addEventListener('change', (e) => {
+  const cb = e.target.closest('[data-visible-toggle]');
+  if (!cb) return;
+  const id = cb.getAttribute('data-id');
+  tabLayoutDraft.hidden = tabLayoutDraft.hidden.filter((h) => h !== id);
+  if (!cb.checked) tabLayoutDraft.hidden.push(id);
+});
+
+$('#resetTabLayoutBtn').addEventListener('click', () => {
+  tabLayoutDraft = { order: PRIMARY_NAV_DEFAULT_ORDER.slice(), hidden: [] };
+  renderTabLayoutRows();
+});
+
+$('#saveTabLayoutBtn').addEventListener('click', withErrorToast(() => {
+  if (!currentUser || !currentUser.isAdmin) { toast('Admins only'); return; }
+  Store.saveTabLayout({ order: tabLayoutDraft.order.slice(), hidden: tabLayoutDraft.hidden.slice() });
+  applyTabLayout();
+  closeModal('tabLayoutModal');
+  toast('Tab layout saved');
+}));
 
 function openDataFileModal() {
   $('#dataFilePathText').value = Store.dataFileLabel;
@@ -944,6 +1075,7 @@ $('#clearProfileBtn').addEventListener('click', withErrorToast(() => {
   $('#profSealFile').value = '';
   Store.saveProfile({
     name: '', address: '', gstin: '', logoDataUrl: '',
+    footerText: '', logoWidthPx: null, logoHeightPx: null,
     bankName: '', bankAccountNo: '', bankIFSC: '', bankBranch: '', sealDataUrl: '',
   });
   loadProfileForm();
@@ -1016,31 +1148,26 @@ function renderLineItems(kind) {
   const items = draft[kind].items;
   const isQuotation = kind === 'quotation';
   if (!items.length) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">No line items added yet.</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="${isQuotation ? 7 : 4}">No line items added yet.</td></tr>`;
   } else {
     tbody.innerHTML = items.map((it, idx) => {
       if (isQuotation && it.amount == null) it.amount = defaultQuotationAmount(it);
       return `
       <tr>
         <td>${escapeHtml(it.name)}</td>
-        ${isQuotation ? '' : `<td>${escapeHtml(it.hsnCode)}</td>`}
         <td class="num-col"><input type="number" min="0" step="any" value="${it.qty}" data-line-field="qty" data-line-idx="${idx}" data-line-kind="${kind}"></td>
         ${isQuotation ? `<td class="num-col"><input type="number" min="0" step="any" value="${it.requiredQty || ''}" data-line-field="requiredQty" data-line-idx="${idx}" data-line-kind="${kind}"></td>` : ''}
-        <td>${escapeHtml(it.unit)}</td>
+        ${isQuotation ? `<td>${escapeHtml(it.unit)}</td>` : ''}
         <td class="num-col"><input type="number" min="0" step="0.01" value="${it.rate}" data-line-field="rate" data-line-idx="${idx}" data-line-kind="${kind}"></td>
         ${isQuotation
           ? `<td class="num-col"><input type="number" min="0" step="0.01" value="${round2(it.amount)}" data-line-field="amount" data-line-idx="${idx}" data-line-kind="${kind}"></td>`
-          : `<td class="num-col"><select data-line-field="gstPercent" data-line-idx="${idx}" data-line-kind="${kind}" data-line-gst-select></select></td>`}
+          : ''}
         <td><button type="button" class="remove-line" data-remove-line="${idx}" data-remove-kind="${kind}">&times;</button></td>
       </tr>
       <tr class="line-details-row">
-        <td colspan="7"><textarea placeholder="Additional details for this line (optional)" data-line-field="details" data-line-idx="${idx}" data-line-kind="${kind}">${escapeHtml(it.details || '')}</textarea></td>
+        <td colspan="${isQuotation ? 7 : 4}"><textarea placeholder="Additional details for this line (optional)" data-line-field="details" data-line-idx="${idx}" data-line-kind="${kind}">${escapeHtml(it.details || '')}</textarea></td>
       </tr>`;
     }).join('');
-    $$('[data-line-gst-select]', tbody).forEach(sel => {
-      const idx = Number(sel.getAttribute('data-line-idx'));
-      populateGstRateOptions(sel, items[idx].gstPercent);
-    });
   }
   renderTotalsBox(kind);
 }
@@ -1105,6 +1232,11 @@ function renderTotalsBox(kind) {
     rows.push(`<div class="row"><span>SGST</span><span>${fmt(totals.sgst)}</span></div>`);
   }
   rows.push(`<div class="row grand"><span>Grand Total</span><span>${fmt(totals.total)}</span></div>`);
+  if (kind === 'invoice' && $('#invoiceIsAdvancePayment').checked) {
+    const advance = Number($('#invoiceAdvanceAmount').value) || 0;
+    rows.push(`<div class="row"><span>Less: Advance Received</span><span>${fmt(advance)}</span></div>`);
+    rows.push(`<div class="row grand"><span>Balance Due</span><span>${fmt(totals.total - advance)}</span></div>`);
+  }
   box.innerHTML = rows.join('');
 }
 
@@ -1287,7 +1419,7 @@ function renderDocPreview(container, docData, company, docTitle, isInvoice) {
     if (isInvoice) {
       return `<tr>
         <td>${idx + 1}</td><td class="product-col">${escapeHtml(it.name)}${detailsHtml}</td><td>${escapeHtml(it.hsnCode)}</td>
-        <td>${it.qty}</td><td>${escapeHtml(it.unit)}</td><td>${fmt(it.rate)}</td>
+        <td>${it.qty}</td><td>${fmt(it.rate)}</td><td>${escapeHtml(it.unit)}</td>
         <td>${it.gstPercent}%</td><td>${fmt(tax)}</td><td>${fmt(taxable + tax)}</td>
       </tr>`;
     }
@@ -1302,7 +1434,7 @@ function renderDocPreview(container, docData, company, docTitle, isInvoice) {
   }).join('');
 
   const theadHtml = isInvoice
-    ? `<tr><th>#</th><th class="product-col">Product</th><th>HSN</th><th>Qty</th><th>Per</th><th>Rate</th><th>GST%</th><th>Tax</th><th>Amount</th></tr>`
+    ? `<tr><th>#</th><th class="product-col">Product</th><th>HSN</th><th>Qty</th><th>Rate</th><th>Per</th><th>GST%</th><th>Tax</th><th>Amount</th></tr>`
     : `<tr><th>#</th><th class="product-col">Product</th><th>Qty</th>${showRequired ? '<th>Required</th>' : ''}<th>Rate</th>${opts.showAmount ? '<th>Amount</th>' : ''}</tr>`;
 
   const taxRowsHtml = !opts.showTax ? '' : (interState
@@ -1376,6 +1508,9 @@ function renderDocPreview(container, docData, company, docTitle, isInvoice) {
       ${opts.showSubtotal ? `<div class="row"><span>Subtotal</span><span>${fmt(docData.subtotal)}</span></div>` : ''}
       ${taxRowsHtml}
       ${opts.showGrandTotal ? `<div class="row grand"><span>Grand Total</span><span>${fmt(docData.total)}</span></div>` : ''}
+      ${isInvoice && docData.isAdvancePayment ? `
+        <div class="row"><span>Less: Advance Received</span><span>${fmt(docData.advanceAmount)}</span></div>
+        <div class="row grand"><span>Balance Due</span><span>${fmt(docData.total - (Number(docData.advanceAmount) || 0))}</span></div>` : ''}
     </div>
     ${!isInvoice && docData.terms && docData.terms.length ? `
       <div class="doc-terms">
@@ -1498,7 +1633,7 @@ function renderInvoices() {
   }
   tbody.innerHTML = invoices.map(inv => `
     <tr>
-      <td>${escapeHtml(inv.invoiceNo)}</td>
+      <td>${escapeHtml(inv.invoiceNo)}${inv.isProforma ? ' <span class="badge badge-muted">Proforma</span>' : ''}</td>
       <td>${escapeHtml(inv.challanNo || '-')}</td>
       <td>${fmtDateShort(inv.date)}</td>
       <td>${escapeHtml(inv._companyName)}</td>
@@ -1525,15 +1660,59 @@ function resetInvoiceModal() {
   $('#invoiceNo').value = getNextInvoiceNo();
   $('#invoiceChallanNo').value = getNextChallanNo();
   $('#invoiceChallanDate').value = todayISO();
+  $('#invoiceChallanNo').disabled = false;
+  $('#invoiceChallanDate').disabled = false;
   $('#invoicePoNumber').value = '';
   $('#invoicePoDate').value = '';
   $('#invoiceIncludeSeal').checked = true;
   $('#invoiceIncludeSignatory').checked = true;
   $('#invoiceShowChallanDash').checked = false;
+  $('#invoiceIsProforma').checked = false;
+  $('#invoiceIsAdvancePayment').checked = false;
+  $('#invoiceIsAdvancePayment').disabled = false;
+  $('#invoiceAdvanceAmount').value = '';
+  $('#invoiceAdvanceAmountRow').style.display = 'none';
+  $('#invoiceNoLabel').textContent = 'Invoice No';
   populateProductPicker($('#invoiceProductPicker'));
   renderLineItems('invoice');
   showInvoiceStep('form');
 }
+
+$('#invoiceIsProforma').addEventListener('change', () => {
+  const isProforma = $('#invoiceIsProforma').checked;
+  $('#invoiceNoLabel').textContent = isProforma ? 'Proforma Invoice No' : 'Invoice No';
+  if (!$('#invoiceId').value) { // only auto-renumber a brand-new invoice, never an edit
+    $('#invoiceNo').value = isProforma ? getNextProformaInvoiceNo() : getNextInvoiceNo();
+  }
+  $('#invoiceIsAdvancePayment').disabled = isProforma;
+  if (isProforma && $('#invoiceIsAdvancePayment').checked) {
+    $('#invoiceIsAdvancePayment').checked = false;
+    $('#invoiceAdvanceAmount').value = '';
+    $('#invoiceAdvanceAmountRow').style.display = 'none';
+    renderTotalsBox('invoice');
+  }
+});
+
+$('#invoiceIsAdvancePayment').addEventListener('change', () => {
+  $('#invoiceAdvanceAmountRow').style.display = $('#invoiceIsAdvancePayment').checked ? '' : 'none';
+  if (!$('#invoiceIsAdvancePayment').checked) $('#invoiceAdvanceAmount').value = '';
+  renderTotalsBox('invoice');
+});
+
+$('#invoiceAdvanceAmount').addEventListener('input', () => renderTotalsBox('invoice'));
+
+$('#invoiceShowChallanDash').addEventListener('change', () => {
+  const checked = $('#invoiceShowChallanDash').checked;
+  $('#invoiceChallanNo').disabled = checked;
+  $('#invoiceChallanDate').disabled = checked;
+  if (checked) {
+    $('#invoiceChallanNo').value = '';
+    $('#invoiceChallanDate').value = '';
+  } else {
+    $('#invoiceChallanNo').value = getNextChallanNo();
+    $('#invoiceChallanDate').value = todayISO();
+  }
+});
 
 function showInvoiceStep(step) {
   const isForm = step === 'form';
@@ -1572,6 +1751,9 @@ function getInvoiceDraftDoc() {
     includeSeal: $('#invoiceIncludeSeal').checked,
     includeSignatory: $('#invoiceIncludeSignatory').checked,
     showChallanDash: $('#invoiceShowChallanDash').checked,
+    isProforma: $('#invoiceIsProforma').checked,
+    isAdvancePayment: $('#invoiceIsAdvancePayment').checked,
+    advanceAmount: $('#invoiceIsAdvancePayment').checked ? (Number($('#invoiceAdvanceAmount').value) || 0) : null,
   });
 }
 
@@ -1580,9 +1762,13 @@ $('#invoiceNextBtn').addEventListener('click', () => {
   if (!$('#invoiceDate').value) { toast('Invoice Date is required'); return; }
   if (!draft.invoice.items.length) { toast('Add at least one line item'); return; }
   if (!$('#invoiceNo').value.trim()) { toast('Invoice No is required'); return; }
+  if ($('#invoiceIsAdvancePayment').checked && !(Number($('#invoiceAdvanceAmount').value) > 0)) {
+    toast('Advance Amount is required');
+    return;
+  }
   const [docData, company] = getInvoiceDraftDoc();
   docData.amountInWords = amountInWords(docData.total);
-  renderDocPreview($('#invoicePreviewContent'), docData, company, 'TAX INVOICE', true);
+  renderDocPreview($('#invoicePreviewContent'), docData, company, docData.isProforma ? 'PROFORMA INVOICE' : 'TAX INVOICE', true);
   showInvoiceStep('preview');
 });
 
@@ -1602,11 +1788,22 @@ $('#invoiceConfirmBtn').addEventListener('click', withErrorToast(async () => {
   const [docData] = getInvoiceDraftDoc();
   docData.amountInWords = amountInWords(docData.total);
   if (isNew) {
-    docData.payment = { received: false, amountReceived: null, paymentDate: null, shortfallType: null, shortfallAmount: 0 };
+    if (docData.isAdvancePayment && docData.advanceAmount > 0) {
+      const shortfall = docData.total - docData.advanceAmount;
+      docData.payment = {
+        received: true,
+        amountReceived: docData.advanceAmount,
+        paymentDate: docData.date,
+        shortfallType: shortfall > 0.009 ? 'pending' : null,
+        shortfallAmount: shortfall > 0.009 ? shortfall : 0,
+      };
+    } else {
+      docData.payment = { received: false, amountReceived: null, paymentDate: null, shortfallType: null, shortfallAmount: 0 };
+    }
     docData.invoiceNo = await guardAgainstNumberCollision(
       [STORAGE_KEYS.invoices], docData.invoiceNo,
       () => Store.getInvoices().map(i => i.invoiceNo),
-      getNextInvoiceNo, 'Invoice No'
+      docData.isProforma ? getNextProformaInvoiceNo : getNextInvoiceNo, 'Invoice No'
     );
     if (docData.challanNo) {
       docData.challanNo = await guardAgainstNumberCollision(
@@ -1641,6 +1838,14 @@ document.addEventListener('click', withErrorToast((e) => {
     $('#invoiceIncludeSeal').checked = inv.includeSeal !== false;
     $('#invoiceIncludeSignatory').checked = inv.includeSignatory !== false;
     $('#invoiceShowChallanDash').checked = !!inv.showChallanDash;
+    $('#invoiceChallanNo').disabled = !!inv.showChallanDash;
+    $('#invoiceChallanDate').disabled = !!inv.showChallanDash;
+    $('#invoiceIsProforma').checked = !!inv.isProforma;
+    $('#invoiceNoLabel').textContent = inv.isProforma ? 'Proforma Invoice No' : 'Invoice No';
+    $('#invoiceIsAdvancePayment').checked = !!inv.isAdvancePayment;
+    $('#invoiceIsAdvancePayment').disabled = !!inv.isProforma;
+    $('#invoiceAdvanceAmount').value = inv.advanceAmount != null ? inv.advanceAmount : '';
+    $('#invoiceAdvanceAmountRow').style.display = inv.isAdvancePayment ? '' : 'none';
     populateProductPicker($('#invoiceProductPicker'));
     populateCompanyDropdowns({ invoice: inv.companyId });
     $('#invoiceCompany').value = inv.companyId;
@@ -2160,7 +2365,7 @@ function paymentInvoiceRow(inv) {
 
 function renderPayments() {
   const container = $('#paymentsByCompany');
-  const invoices = Store.getInvoices();
+  const invoices = realInvoices();
   if (!invoices.length) {
     container.innerHTML = `<div class="card" style="padding:30px; text-align:center; color:var(--text-muted);">No invoices yet.</div>`;
     return;
@@ -2291,7 +2496,7 @@ $('#savePaymentBtn').addEventListener('click', withErrorToast(() => {
 ===================================================================== */
 function computeCompanyOutstanding() {
   const companies = Store.getCompanies();
-  const invoices = Store.getInvoices();
+  const invoices = realInvoices();
   return companies.map(c => {
     const invs = invoices.filter(i => i.companyId === c.id);
     let owed = 0, gstOwed = 0, subtotalOwed = 0, unpaidCount = 0, oldestUnpaidDate = null;
@@ -2335,7 +2540,7 @@ function renderSummaryOutstanding() {
 let summaryPeriodMode = 'annual';
 
 function computeSalesByPeriod(mode) {
-  const invoices = Store.getInvoices();
+  const invoices = realInvoices();
   const map = new Map();
   invoices.forEach(inv => {
     const key = mode === 'annual' ? currentFinancialYear(parseLocalDate(inv.date)) : inv.date.slice(0, 7);
@@ -2411,7 +2616,7 @@ function computeProfitLossByPeriod(mode) {
     return map.get(key);
   }
   const keyFor = (dateStr) => mode === 'annual' ? currentFinancialYear(parseLocalDate(dateStr)) : dateStr.slice(0, 7);
-  Store.getInvoices().forEach(inv => {
+  realInvoices().forEach(inv => {
     const row = ensure(keyFor(inv.date));
     row.sales += Number(inv.subtotal) || 0;
     row.tds += inv.payment && inv.payment.received && inv.payment.shortfallType === 'tds' ? Number(inv.payment.shortfallAmount) || 0 : 0;
@@ -2491,7 +2696,7 @@ function computeGSTByPeriod(mode) {
     return map.get(key);
   }
   const keyFor = (dateStr) => mode === 'annual' ? currentFinancialYear(parseLocalDate(dateStr)) : dateStr.slice(0, 7);
-  Store.getInvoices().forEach(inv => {
+  realInvoices().forEach(inv => {
     const row = ensure(keyFor(inv.date));
     row.output += (Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0);
   });
@@ -2574,7 +2779,7 @@ function colorForIndex(i) { return CHART_COLORS[i % CHART_COLORS.length]; }
 /** Sums every invoice's total by company — all-time, no period filter, so any invoice (past, present, or backdated) always counts. */
 function computeCompanySalesTotals() {
   const totals = new Map(); // companyId -> total
-  Store.getInvoices().forEach(inv => {
+  realInvoices().forEach(inv => {
     totals.set(inv.companyId, (totals.get(inv.companyId) || 0) + (Number(inv.total) || 0));
   });
   return Array.from(totals.entries())
@@ -2586,7 +2791,7 @@ function computeCompanySalesTotals() {
 /** Sums every invoice line item's total (qty*rate*(1+gst%), matching pdf.js's buildItemRows) by product name — all-time, no period filter. */
 function computeProductSalesTotals() {
   const totals = new Map(); // product name -> total
-  Store.getInvoices().forEach(inv => {
+  realInvoices().forEach(inv => {
     (inv.items || []).forEach(item => {
       const taxable = (Number(item.qty) || 0) * (Number(item.rate) || 0);
       const lineTotal = taxable * (1 + (Number(item.gstPercent) || 0) / 100);
@@ -2628,7 +2833,7 @@ function computeCompanySalesByPeriod(mode) {
   const periodLabels = new Map();
   const companyTotals = new Map(); // companyId -> Map(periodKey -> total)
 
-  Store.getInvoices().forEach(inv => {
+  realInvoices().forEach(inv => {
     const { key, label } = salesTrendPeriodKey(mode, inv.date);
     if (!periodLabels.has(key)) periodLabels.set(key, label);
     if (!companyTotals.has(inv.companyId)) companyTotals.set(inv.companyId, new Map());
@@ -2653,7 +2858,7 @@ function computeProductSalesByPeriod(mode) {
   const periodLabels = new Map();
   const productTotals = new Map(); // product name -> Map(periodKey -> total)
 
-  Store.getInvoices().forEach(inv => {
+  realInvoices().forEach(inv => {
     const { key, label } = salesTrendPeriodKey(mode, inv.date);
     if (!periodLabels.has(key)) periodLabels.set(key, label);
     (inv.items || []).forEach(item => {
@@ -3012,12 +3217,92 @@ $('#btnDownloadDbSnapshot').addEventListener('click', withErrorToast(async () =>
   toast('Downloaded the latest database snapshot');
 }));
 
+/* =====================================================================
+   SYNC TO DB (Admin-only) — pushes the local file's current data to
+   Supabase, but only after showing a full field-level diff for review.
+   Deliberately independent of dataBackendMode, mirroring the Download DB
+   Snapshot button above; see Store.computeSyncDiff/syncPushToSupabase.
+===================================================================== */
+const SYNC_ENTITY_LABELS = {
+  [STORAGE_KEYS.products]: 'Products',
+  [STORAGE_KEYS.companies]: 'Companies',
+  [STORAGE_KEYS.profile]: 'Business Profile',
+  [STORAGE_KEYS.quotations]: 'Quotations',
+  [STORAGE_KEYS.invoices]: 'Invoices',
+  [STORAGE_KEYS.purchases]: 'Purchases',
+  [STORAGE_KEYS.expenses]: 'Expenses',
+  [STORAGE_KEYS.units]: 'Units',
+  [STORAGE_KEYS.gstRates]: 'GST Rates',
+  [STORAGE_KEYS.expenseCategories]: 'Expense Categories',
+  [STORAGE_KEYS.termsTemplates]: 'Terms & Conditions',
+};
+
+function syncRecordLabel(record) {
+  if (!record) return '(none)';
+  return record.invoiceNo || record.quotationNo || record.purchaseNo || record.name || record.value || record.text
+    || (record.date ? `${record.date}${record.category ? ' — ' + record.category : ''}` : record.id);
+}
+
+function formatDiffValue(v) {
+  if (v === undefined || v === null || v === '') return '<em>(empty)</em>';
+  if (typeof v === 'object') return `<code>${escapeHtml(JSON.stringify(v))}</code>`;
+  return escapeHtml(String(v));
+}
+
+function diffFieldsTable(changes) {
+  return `<table class="diff-table"><thead><tr><th>Field</th><th>Current (DB)</th><th>New (Local)</th></tr></thead><tbody>
+    ${changes.map(c => `<tr><td>${escapeHtml(c.field)}</td><td>${formatDiffValue(c.oldValue)}</td><td>${formatDiffValue(c.newValue)}</td></tr>`).join('')}
+  </tbody></table>`;
+}
+
+function renderSyncDiffModal(diff) {
+  let totalChanges = 0;
+  const sections = ALL_BUSINESS_DATA_KEYS.map((key) => {
+    const d = diff[key];
+    if (!d) return '';
+    const label = SYNC_ENTITY_LABELS[key] || key;
+    if (d.type === 'object') {
+      if (!d.changes.length) return '';
+      totalChanges += 1;
+      return `<details open><summary><strong>${escapeHtml(label)}</strong> — changed</summary>${diffFieldsTable(d.changes)}</details>`;
+    }
+    const { added, changed, removed } = d;
+    if (!added.length && !changed.length && !removed.length) return '';
+    totalChanges += added.length + changed.length + removed.length;
+    const addedHtml = added.length ? `<div><strong>Added (${added.length}):</strong> ${added.map(r => escapeHtml(syncRecordLabel(r))).join(', ')}</div>` : '';
+    const removedHtml = removed.length ? `<div><strong>Removed (${removed.length}):</strong> ${removed.map(r => escapeHtml(syncRecordLabel(r))).join(', ')}</div>` : '';
+    const changedHtml = changed.length ? changed.map(c => `
+      <details><summary>Changed: ${escapeHtml(syncRecordLabel(c.record))}</summary>${diffFieldsTable(c.changes)}</details>`).join('') : '';
+    return `<details open><summary><strong>${escapeHtml(label)}</strong> — ${added.length} added, ${changed.length} changed, ${removed.length} removed</summary>
+      <div style="padding:8px 0 8px 16px;">${addedHtml}${removedHtml}${changedHtml}</div>
+    </details>`;
+  }).filter(Boolean).join('');
+
+  $('#syncDiffBody').innerHTML = totalChanges ? sections : '<p>No differences — local data already matches the database.</p>';
+  $('#confirmSyncBtn').style.display = totalChanges ? '' : 'none';
+}
+
+$('#btnSyncToDb').addEventListener('click', withErrorToast(async () => {
+  if (!currentUser || !currentUser.isAdmin) { toast('Admins only'); return; }
+  toast('Comparing local data with the database…');
+  const diff = await Store.computeSyncDiff();
+  renderSyncDiffModal(diff);
+  openModal('syncDiffModal');
+}));
+
+$('#confirmSyncBtn').addEventListener('click', withErrorToast(async () => {
+  if (!currentUser || !currentUser.isAdmin) { toast('Admins only'); return; }
+  await Store.syncPushToSupabase();
+  closeModal('syncDiffModal');
+  toast('Synced local data to the database');
+}));
+
 function invoicePeriodKey(mode, dateStr) {
   return mode === 'annual' ? currentFinancialYear(parseLocalDate(dateStr)) : dateStr.slice(0, 7);
 }
 
 function getInvoicePeriodOptions(mode) {
-  const keys = new Set(Store.getInvoices().map(inv => invoicePeriodKey(mode, inv.date)));
+  const keys = new Set(realInvoices().map(inv => invoicePeriodKey(mode, inv.date)));
   return Array.from(keys).sort().reverse().map(key => ({
     value: key,
     label: mode === 'annual' ? `FY ${key}` : formatMonthLabel(key),
@@ -3026,7 +3311,7 @@ function getInvoicePeriodOptions(mode) {
 
 function getFinancialYearOptions() {
   const keys = new Set([
-    ...Store.getInvoices().map(inv => currentFinancialYear(parseLocalDate(inv.date))),
+    ...realInvoices().map(inv => currentFinancialYear(parseLocalDate(inv.date))),
     ...Store.getPurchases().map(p => currentFinancialYear(parseLocalDate(p.date))),
     ...Store.getExpenses().map(e => currentFinancialYear(parseLocalDate(e.date))),
   ]);
@@ -3094,7 +3379,7 @@ $('#exportPeriodModeAnnualBtn').addEventListener('click', () => {
 });
 
 function exportInvoicesByPeriod(mode, key) {
-  const invoices = Store.getInvoices()
+  const invoices = realInvoices()
     .filter(inv => invoicePeriodKey(mode, inv.date) === key)
     .sort((a, b) => new Date(a.date) - new Date(b.date));
   const label = mode === 'annual' ? `FY_${key}` : key;
@@ -3103,7 +3388,7 @@ function exportInvoicesByPeriod(mode, key) {
 
 function exportFinancialYearSummary(fy) {
   const inFY = (dateStr) => currentFinancialYear(parseLocalDate(dateStr)) === fy;
-  const invoices = Store.getInvoices().filter(inv => inFY(inv.date)).sort((a, b) => new Date(a.date) - new Date(b.date));
+  const invoices = realInvoices().filter(inv => inFY(inv.date)).sort((a, b) => new Date(a.date) - new Date(b.date));
   const purchases = Store.getPurchases().filter(p => inFY(p.date)).sort((a, b) => new Date(a.date) - new Date(b.date));
   const expenses = Store.getExpenses().filter(e => inFY(e.date)).sort((a, b) => new Date(a.date) - new Date(b.date));
   downloadWorkbook([
@@ -3115,7 +3400,7 @@ function exportFinancialYearSummary(fy) {
 }
 
 function exportInvoicesByCompany(companyId) {
-  const invoices = Store.getInvoices()
+  const invoices = realInvoices()
     .filter(inv => inv.companyId === companyId)
     .sort((a, b) => new Date(a.date) - new Date(b.date));
   const safeName = companyName(companyId).replace(/[^a-z0-9]+/gi, '_');
@@ -3159,7 +3444,7 @@ async function renderErrorLogs() {
     rows = sortState.errorLogs ? sortRows(rows, 'errorLogs') : rows;
     tbody.innerHTML = rows.map(r => `
       <tr>
-        <td>${escapeHtml(new Date(r.created_at).toLocaleString('en-IN'))}</td>
+        <td>${escapeHtml(new Date(r.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }))}</td>
         <td>${escapeHtml(r.source || '-')}</td>
         <td>${escapeHtml(r.message || '-')}</td>
         <td>${escapeHtml(r.probable_cause || '-')}</td>
@@ -3217,11 +3502,25 @@ function init() {
   populateUnitOptions();
   populateGstRateOptions($('#productGst'));
   populateExpenseCategoryOptions();
+  applyTabLayout();
   /* Quotations/Invoices/Purchases/Expenses/Payments/Summary no longer render
      here unconditionally — they go through activateTab's lazy-fetch gate
      instead (see TAB_LAZY_KEYS above), so re-render whichever tab is actually
-     showing (defaults to the hardcoded Summary landing tab on first boot). */
-  activateTab(currentTabId || 'summary');
+     showing. On the very first load (currentTabId still null), the landing
+     tab is no longer hardcoded to Summary — getDefaultLandingTabId() picks
+     the first tab actually visible to the current user, in case Financials
+     has been hidden for a non-admin via Tab Layout; this also requires
+     re-driving setPrimaryActive/showSubnav here (the hardcoded HTML 'active'
+     classes only match the true default), while later init() re-calls
+     (Switch Folder, DB Connection save, etc.) keep reusing currentTabId
+     exactly as before. */
+  if (!currentTabId) {
+    const landing = getDefaultLandingTabId();
+    const landingGroup = groupForTab(landing);
+    setPrimaryActive(landingGroup || landing);
+    showSubnav(landingGroup);
+  }
+  activateTab(currentTabId || getDefaultLandingTabId());
   updateConnectivityBanner();
 }
 
@@ -3330,6 +3629,7 @@ async function handleLoginSubmit() {
   try {
     await SupabaseClient.signIn(username, password);
     currentUser = await SupabaseClient.getMyProfile();
+    ErrorLog.record('Login succeeded', null, { source: 'SupabaseClient.signIn', username });
     Store.setViewerMode(currentUser.isViewer);
     document.body.classList.toggle('viewer-mode', !!currentUser.isViewer);
     Store.setDeleteRestricted(!currentUser.isAdmin);

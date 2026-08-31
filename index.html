@@ -85,13 +85,12 @@
 
 <header class="topbar">
   <div>
-    <h1>Business Suite</h1>
+    <h1 id="appTitleHeading">Business Suite</h1>
     <div class="biz-name" id="topbarBizName">Set up your Business Profile to get started</div>
     <button class="data-file-indicator" id="dataFileIndicator" type="button" title="Click to view/switch your connected data file">Connecting…</button>
   </div>
   <div class="header-actions">
     <button class="btn btn-secondary" id="btnOpenExport" type="button">Export</button>
-    <button class="btn btn-secondary" id="btnDownloadDbSnapshot" type="button" title="Fetch the latest data from the database and download it as business-suite-data.json">Download DB Snapshot</button>
     <button class="btn btn-secondary" id="btnLogout" type="button">Logout</button>
     <div class="settings-menu">
       <button class="settings-btn" id="btnOpenSettings" type="button" title="Settings">&#9881;</button>
@@ -101,6 +100,9 @@
         <button type="button" data-settings-action="dataFile">Data File</button>
         <button type="button" data-settings-action="userConfig">User Configuration</button>
         <button type="button" data-settings-action="dbConnection">DB Connection</button>
+        <button type="button" data-settings-action="tabLayout">Tab Layout</button>
+        <button type="button" id="btnSyncToDb" data-settings-action="syncToDb" title="Compare local data with the database and push changes after review">Sync to DB</button>
+        <button type="button" id="btnDownloadDbSnapshot" data-settings-action="downloadDbSnapshot" title="Fetch the latest data from the database and download it as business-suite-data.json">Download DB Snapshot</button>
       </div>
     </div>
   </div>
@@ -551,7 +553,7 @@
     <table>
       <thead>
         <tr>
-          <th class="sortable" data-sort-table="errorLogs" data-sort-key="created_at" data-sort-type="date">Timestamp</th>
+          <th class="sortable" data-sort-table="errorLogs" data-sort-key="created_at" data-sort-type="date">Timestamp (IST)</th>
           <th class="sortable" data-sort-table="errorLogs" data-sort-key="source" data-sort-type="text">Source</th>
           <th class="sortable" data-sort-table="errorLogs" data-sort-key="message" data-sort-type="text">Message</th>
           <th class="sortable" data-sort-table="errorLogs" data-sort-key="probable_cause" data-sort-type="text">Probable Cause</th>
@@ -767,7 +769,7 @@
             <input type="date" id="invoiceDate" required>
           </div>
           <div class="form-field">
-            <label for="invoiceNo">Invoice No</label>
+            <label for="invoiceNo" id="invoiceNoLabel">Invoice No</label>
             <input type="text" id="invoiceNo" required>
           </div>
           <div class="form-field">
@@ -788,6 +790,17 @@
           </div>
         </div>
 
+        <div class="checkbox-row">
+          <label><input type="checkbox" id="invoiceIsProforma"> Proforma Invoice</label>
+          <label><input type="checkbox" id="invoiceIsAdvancePayment"> Advance Payment Received</label>
+        </div>
+        <div class="form-grid" id="invoiceAdvanceAmountRow" style="display:none; margin-top:10px;">
+          <div class="form-field">
+            <label for="invoiceAdvanceAmount">Advance Amount</label>
+            <input type="number" id="invoiceAdvanceAmount" min="0" step="0.01">
+          </div>
+        </div>
+
         <div class="form-grid" style="margin-top:14px;">
           <div class="form-field">
             <label for="invoiceProductPicker">Add Product</label>
@@ -800,7 +813,7 @@
 
         <table class="line-items-table" id="invoiceLineItemsTable">
           <thead>
-            <tr><th class="product-col">Product</th><th>HSN</th><th class="num-col">Qty</th><th>Unit</th><th class="num-col">Rate</th><th class="num-col">GST%</th><th></th></tr>
+            <tr><th class="product-col">Product</th><th class="num-col">Qty</th><th class="num-col">Rate</th><th></th></tr>
           </thead>
           <tbody id="invoiceLineItemsBody"></tbody>
         </table>
@@ -1064,50 +1077,104 @@
     </div>
     <form id="profileForm">
       <div class="modal-body">
-        <div class="form-grid">
-          <div class="form-field">
-            <label for="profName">Business Name</label>
-            <input type="text" id="profName" required>
+        <div class="card accordion-item">
+          <div class="accordion-header">
+            <span class="accordion-caret">&#9656;</span>
+            <span class="accordion-title">Business Details</span>
           </div>
-          <div class="form-field">
-            <label for="profGstin">GSTIN</label>
-            <input type="text" id="profGstin" maxlength="15" placeholder="e.g. 27ABCDE1234F1Z5">
-          </div>
-          <div class="form-field span-2">
-            <label for="profAddress">Address</label>
-            <textarea id="profAddress" placeholder="Shown in the PDF header and footer"></textarea>
-          </div>
-          <div class="form-field">
-            <label for="profLogoFile">Logo</label>
-            <div class="upload-row">
-              <img id="profLogoPreview" class="upload-preview" src="" alt="" style="display:none;">
-              <input type="file" id="profLogoFile" accept="image/*">
+          <div class="accordion-body" style="display:none;">
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="profName">Business Name</label>
+                <input type="text" id="profName" required>
+              </div>
+              <div class="form-field">
+                <label for="profGstin">GSTIN</label>
+                <input type="text" id="profGstin" maxlength="15" placeholder="e.g. 27ABCDE1234F1Z5">
+              </div>
+              <div class="form-field span-2">
+                <label for="profAddress">Address</label>
+                <textarea id="profAddress" placeholder="Shown in the PDF header and footer"></textarea>
+              </div>
             </div>
-          </div>
-          <div class="form-field">
-            <label for="profSealFile">Company Seal / Stamp</label>
-            <div class="upload-row">
-              <img id="profSealPreview" class="upload-preview" src="" alt="" style="display:none;">
-              <input type="file" id="profSealFile" accept="image/*">
-            </div>
-          </div>
-          <div class="form-field">
-            <label for="profBankName">Bank Name</label>
-            <input type="text" id="profBankName">
-          </div>
-          <div class="form-field">
-            <label for="profBankAccountNo">Account Number</label>
-            <input type="text" id="profBankAccountNo">
-          </div>
-          <div class="form-field">
-            <label for="profBankIFSC">IFSC Code</label>
-            <input type="text" id="profBankIFSC">
-          </div>
-          <div class="form-field">
-            <label for="profBankBranch">Branch</label>
-            <input type="text" id="profBankBranch">
           </div>
         </div>
+
+        <div class="card accordion-item">
+          <div class="accordion-header">
+            <span class="accordion-caret">&#9656;</span>
+            <span class="accordion-title">Logo &amp; Branding</span>
+          </div>
+          <div class="accordion-body" style="display:none;">
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="profLogoFile">Logo</label>
+                <div class="upload-row">
+                  <img id="profLogoPreview" class="upload-preview" src="" alt="" style="display:none;">
+                  <input type="file" id="profLogoFile" accept="image/*">
+                </div>
+              </div>
+              <div class="form-field">
+                <label for="profLogoWidthPx">Logo Width (px)</label>
+                <input type="number" id="profLogoWidthPx" min="1" placeholder="Default ~90px">
+              </div>
+              <div class="form-field">
+                <label for="profLogoHeightPx">Logo Height (px)</label>
+                <input type="number" id="profLogoHeightPx" min="1" placeholder="Default ~90px">
+              </div>
+              <div class="form-field span-2">
+                <label for="profFooterText">Footer Text (PDF)</label>
+                <textarea id="profFooterText" placeholder="Shown at the bottom of every PDF page. Leave blank to default to Business Name | Address."></textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card accordion-item">
+          <div class="accordion-header">
+            <span class="accordion-caret">&#9656;</span>
+            <span class="accordion-title">Company Seal</span>
+          </div>
+          <div class="accordion-body" style="display:none;">
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="profSealFile">Company Seal / Stamp</label>
+                <div class="upload-row">
+                  <img id="profSealPreview" class="upload-preview" src="" alt="" style="display:none;">
+                  <input type="file" id="profSealFile" accept="image/*">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card accordion-item">
+          <div class="accordion-header">
+            <span class="accordion-caret">&#9656;</span>
+            <span class="accordion-title">Bank Details</span>
+          </div>
+          <div class="accordion-body" style="display:none;">
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="profBankName">Bank Name</label>
+                <input type="text" id="profBankName">
+              </div>
+              <div class="form-field">
+                <label for="profBankAccountNo">Account Number</label>
+                <input type="text" id="profBankAccountNo">
+              </div>
+              <div class="form-field">
+                <label for="profBankIFSC">IFSC Code</label>
+                <input type="text" id="profBankIFSC">
+              </div>
+              <div class="form-field">
+                <label for="profBankBranch">Branch</label>
+                <input type="text" id="profBankBranch">
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="form-hint" style="margin-top:6px;">Bank details &amp; seal appear on Invoice PDFs only. Logo, name &amp; address appear on both Quotations and Invoices.</div>
       </div>
       <div class="modal-footer">
@@ -1116,6 +1183,45 @@
         <button type="submit" class="btn btn-primary" data-mutating>Save Business Profile</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- ===================== SYNC TO DB MODAL (opened via the header "Sync to DB" button, admin-only) ===================== -->
+<div class="modal-overlay" id="syncDiffModal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Sync to Database — Review Changes</h3>
+      <button class="modal-close" data-close="syncDiffModal">&times;</button>
+    </div>
+    <div class="modal-body" id="syncDiffBody"></div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" data-close="syncDiffModal">Cancel</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn btn-primary" id="confirmSyncBtn">Confirm &amp; Push to Database</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== TAB LAYOUT MODAL (opened via Settings > Tab Layout, admin-only) ===================== -->
+<div class="modal-overlay" id="tabLayoutModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Tab Layout</h3>
+      <button class="modal-close" data-close="tabLayoutModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint">Choose which tabs regular Users/Viewers see, and reorder them. Admins always see every tab regardless of this setting.</p>
+      <table class="tab-layout-table">
+        <thead><tr><th></th><th>Tab</th><th>Visible to Users</th></tr></thead>
+        <tbody id="tabLayoutBody"></tbody>
+      </table>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" id="resetTabLayoutBtn">Reset to Default</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn btn-secondary" data-close="tabLayoutModal">Cancel</button>
+      <button type="button" class="btn btn-primary" id="saveTabLayoutBtn">Save Tab Layout</button>
+    </div>
   </div>
 </div>
 

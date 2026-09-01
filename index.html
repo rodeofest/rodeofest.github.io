@@ -765,12 +765,12 @@
             <select id="invoiceCompany" required></select>
           </div>
           <div class="form-field">
-            <label for="invoiceDate">Invoice Date</label>
-            <input type="date" id="invoiceDate" required>
-          </div>
-          <div class="form-field">
             <label for="invoiceNo" id="invoiceNoLabel">Invoice No</label>
             <input type="text" id="invoiceNo" required>
+          </div>
+          <div class="form-field">
+            <label for="invoiceDate">Invoice Date</label>
+            <input type="date" id="invoiceDate" required>
           </div>
           <div class="form-field">
             <label for="invoiceChallanNo">Challan No</label>
@@ -780,8 +780,15 @@
             <label for="invoiceChallanDate">Challan Date</label>
             <input type="date" id="invoiceChallanDate">
           </div>
+        </div>
+
+        <div class="checkbox-row">
+          <label><input type="checkbox" id="invoiceShowChallanDash"> Show '-' for empty Challan No / Date</label>
+        </div>
+
+        <div class="form-grid" style="margin-top:14px;">
           <div class="form-field">
-            <label for="invoicePoNumber">Purchase Order #</label>
+            <label for="invoicePoNumber">Purchase Order No</label>
             <input type="text" id="invoicePoNumber">
           </div>
           <div class="form-field">
@@ -790,7 +797,7 @@
           </div>
         </div>
 
-        <div class="checkbox-row">
+        <div class="checkbox-row" style="margin-top:10px;">
           <label><input type="checkbox" id="invoiceIsProforma"> Proforma Invoice</label>
           <label><input type="checkbox" id="invoiceIsAdvancePayment"> Advance Payment Received</label>
         </div>
@@ -824,7 +831,6 @@
           <span class="display-options-label">Show on Invoice:</span>
           <label><input type="checkbox" id="invoiceIncludeSeal"> Company Seal</label>
           <label><input type="checkbox" id="invoiceIncludeSignatory"> Signatory Line (For Business Name / Authorized Signatory)</label>
-          <label><input type="checkbox" id="invoiceShowChallanDash"> Show '-' for empty Challan No / Date</label>
         </div>
       </div>
 

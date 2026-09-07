@@ -232,6 +232,12 @@ tbody td {
 }
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: #fafbff; }
+/* Always applied to a <div> wrapping the buttons INSIDE a plain <td>, never
+   to the <td> itself — display:flex on a table cell takes it out of the
+   table layout model entirely, so it stops inheriting tbody td's
+   vertical-align:middle/row-height stretching above and pins to the top of
+   the row instead (invisible on desktop's short rows, glaring on mobile
+   once other columns wrap and rows get tall). */
 .actions-cell { display: flex; gap: 6px; white-space: nowrap; }
 .empty-row td { text-align: center; color: var(--text-muted); padding: 30px; }
 
@@ -371,6 +377,20 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
   font-size: 12.5px; font-family: inherit; resize: vertical;
 }
 
+/* ---- Service Report: free-form, user-configurable tables ---- */
+.free-table-new-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin: 6px 0 10px; font-size: 12.5px; }
+.free-table-new-row label { display: flex; align-items: center; gap: 4px; }
+.free-table-new-row input[type="number"] { width: 60px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 5px; }
+.free-table-block { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 12px; overflow-x: auto; }
+.free-table-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12.5px; }
+.free-table-toolbar label { display: flex; align-items: center; gap: 4px; }
+.free-table-toolbar input[type="number"] { width: 60px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 5px; }
+.free-table-grid { border-collapse: collapse; }
+.free-table-grid td { border: 1px solid var(--border); padding: 2px; }
+.free-table-grid textarea { width: 140px; min-height: 34px; padding: 5px 6px; border: none; resize: vertical; font-size: 12.5px; font-family: inherit; }
+.free-table-grid textarea:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+.free-table-grid tr.header-row textarea { font-weight: 700; background: #eef1f8; }
+
 .display-options {
   margin-top: 14px;
   display: flex; flex-wrap: wrap; align-items: center; gap: 16px;
@@ -422,6 +442,10 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
 .doc-preview .doc-terms { margin-top: 14px; padding-top: 10px; border-top: 1px dotted var(--border); font-size: 11.5px; color: var(--text-muted); }
 .doc-preview .doc-terms-title { font-weight: 600; color: var(--text); margin-bottom: 4px; text-transform: uppercase; font-size: 11px; }
 .doc-preview .doc-terms ol { margin: 0; padding-left: 18px; }
+.doc-preview .doc-paragraph { white-space: pre-wrap; margin-bottom: 14px; font-size: 12.5px; line-height: 1.5; }
+.doc-preview .doc-free-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; table-layout: auto; }
+.doc-preview .doc-free-table td { border: 1px solid var(--border); padding: 6px 8px; font-size: 12px; vertical-align: top; word-wrap: break-word; }
+.doc-preview .doc-free-table tr.header-row td { font-weight: 700; background: #eef1f8; }
 
 /* ---- Step indicator ---- */
 .step-indicator { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; font-size: 12.5px; color: var(--text-muted); }
@@ -533,4 +557,6 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
   .line-items-table .num-col { width: 120px; min-width: 120px; }
   .line-items-table input, .line-items-table select { font-size: 16px; padding: 9px 8px; }
   .display-options { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .free-table-toolbar, .free-table-new-row { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .free-table-grid textarea { width: 100%; font-size: 16px; }
 }

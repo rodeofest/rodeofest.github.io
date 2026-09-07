@@ -219,6 +219,53 @@ function drawTotalsBlock(doc, startY, totals, displayOptions) {
   return y;
 }
 
+/* Draws the "For {business name}" / seal (image or placeholder box) /
+   "Authorized Signatory" block starting at startY, right-aligned near the
+   page margin. Shared by buildInvoicePdf and buildServiceReportPdf — it only
+   ever reads the issuing business's own profile, never document-specific
+   fields. Returns the Y the signatory caption was drawn at, in case a caller
+   needs to know how much vertical space this consumed. */
+function drawSealSignatoryBlock(doc, startY, profile, opts) {
+  opts = Object.assign({ includeSeal: true, includeSignatory: true }, opts || {});
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const sealX = pageWidth - PAGE_MARGIN - 45;
+  const sealY = startY;
+  const sealAreaHeight = 20;
+  const forNameY = sealY - 3;
+  const signatoryY = sealY + sealAreaHeight + 4;
+
+  if (opts.includeSignatory) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(0);
+    doc.text(`For ${profile.name || 'Business Name'}`, sealX + 20, forNameY, { align: 'center' });
+  }
+
+  if (opts.includeSeal) {
+    if (profile.sealDataUrl) {
+      try {
+        doc.addImage(profile.sealDataUrl, imageFormatFromDataUrl(profile.sealDataUrl), sealX, sealY, 40, sealAreaHeight);
+      } catch (e) { /* ignore */ }
+    } else {
+      doc.setDrawColor(180);
+      doc.rect(sealX, sealY, 40, sealAreaHeight);
+      doc.setFontSize(8);
+      doc.setTextColor(150);
+      doc.text('Company Seal', sealX + 20, sealY + sealAreaHeight / 2 + 2, { align: 'center' });
+      doc.setTextColor(0);
+    }
+  }
+
+  if (opts.includeSignatory) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(0);
+    doc.text('Authorized Signatory', sealX + 20, signatoryY, { align: 'center' });
+  }
+
+  return signatoryY;
+}
+
 function buildQuotationPdf(quotation, company, profile) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
@@ -340,42 +387,91 @@ function buildInvoicePdf(invoice, company, profile) {
   ].filter(Boolean);
   doc.text(bankLines.length ? bankLines : ['Bank details not set'], PAGE_MARGIN, y);
 
-  const includeSeal = invoice.includeSeal !== false;
-  const includeSignatory = invoice.includeSignatory !== false;
-  const sealX = pageWidth - PAGE_MARGIN - 45;
-  const sealY = y;
-  const sealAreaHeight = 20;
-  const forNameY = sealY - 3;
-  const signatoryY = sealY + sealAreaHeight + 4;
+  drawSealSignatoryBlock(doc, y, profile, {
+    includeSeal: invoice.includeSeal !== false,
+    includeSignatory: invoice.includeSignatory !== false,
+  });
 
-  if (includeSignatory) {
+  drawFooter(doc, profile);
+  return doc;
+}
+
+/* Service Report: header (via the shared drawHeader), a free-edit reference
+   paragraph, any number of user-configured free-form tables (no semantic
+   header row — every row is user-entered data), an optional numbered Notes
+   list, then the same seal/signatory block Invoice uses. */
+function buildServiceReportPdf(report, company, profile) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  let y = drawHeader(doc, profile, company, {
+    docTitle: 'SERVICE REPORT',
+    docNo: report.reportNo,
+    docDate: report.date,
+    noLabel: 'Report No:',
+    dateLabel: 'Report Date:',
+    toLabel: 'To:',
+    extraRightLines: [
+      { label: 'Date of Service:', value: report.serviceDate ? fmtDate(report.serviceDate) : '' },
+    ],
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  if (report.paragraph) {
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
+    doc.setFontSize(10);
     doc.setTextColor(0);
-    doc.text(`For ${profile.name || 'Business Name'}`, sealX + 20, forNameY, { align: 'center' });
+    const lines = doc.splitTextToSize(report.paragraph, pageWidth - PAGE_MARGIN * 2);
+    if (y + lines.length * 5 > pageHeight - 20) { doc.addPage(); y = 20; }
+    doc.text(lines, PAGE_MARGIN, y);
+    y += lines.length * 5 + 6;
   }
 
-  if (includeSeal) {
-    if (profile.sealDataUrl) {
-      try {
-        doc.addImage(profile.sealDataUrl, imageFormatFromDataUrl(profile.sealDataUrl), sealX, sealY, 40, sealAreaHeight);
-      } catch (e) { /* ignore */ }
-    } else {
-      doc.setDrawColor(180);
-      doc.rect(sealX, sealY, 40, sealAreaHeight);
-      doc.setFontSize(8);
-      doc.setTextColor(150);
-      doc.text('Company Seal', sealX + 20, sealY + sealAreaHeight / 2 + 2, { align: 'center' });
-      doc.setTextColor(0);
-    }
-  }
+  // Free-form tables: no semantic header row unless the user opted into one
+  // via "Header Row" — everything is user-entered data either way, so the
+  // header (when present) is just the table's own first row promoted into
+  // autoTable's head slot for the bold/navy styling. jspdf-autotable
+  // auto-paginates on its own, so no manual page-break guard is needed here
+  // (unlike the paragraph/notes text blocks).
+  (report.tables || []).forEach((t) => {
+    if (!t.data || !t.data.length) return;
+    const hasHeader = !!t.hasHeader;
+    doc.autoTable({
+      startY: y,
+      head: hasHeader ? [t.data[0]] : [],
+      body: hasHeader ? t.data.slice(1) : t.data,
+      margin: { left: PAGE_MARGIN, right: PAGE_MARGIN },
+      styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
+      headStyles: { fillColor: [40, 55, 90] },
+      bodyStyles: { fontSize: 9, textColor: [0, 0, 0] },
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  });
 
-  if (includeSignatory) {
+  if (report.notes && report.notes.length) {
+    if (y > pageHeight - 55) { doc.addPage(); y = 20; }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(0);
+    doc.text('Notes', PAGE_MARGIN, y);
+    y += 5;
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(0);
-    doc.text('Authorized Signatory', sealX + 20, signatoryY, { align: 'center' });
+    doc.setFontSize(9);
+    report.notes.forEach((note, idx) => {
+      const lines = doc.splitTextToSize(`${idx + 1}. ${note}`, pageWidth - PAGE_MARGIN * 2);
+      if (y + lines.length * 4.5 > pageHeight - 20) { doc.addPage(); y = 20; }
+      doc.text(lines, PAGE_MARGIN, y);
+      y += lines.length * 4.5 + 1;
+    });
+    y += 6;
   }
+
+  if (y > pageHeight - 45) { doc.addPage(); y = 20; }
+  drawSealSignatoryBlock(doc, y, profile, {
+    includeSeal: report.includeSeal !== false,
+    includeSignatory: report.includeSignatory !== false,
+  });
 
   drawFooter(doc, profile);
   return doc;

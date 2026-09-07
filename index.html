@@ -128,6 +128,7 @@
   <button class="tab-btn sub" data-tab="quotations">Quotations</button>
   <button class="tab-btn sub" data-tab="invoices">Invoices</button>
   <button class="tab-btn sub" data-tab="payments">Payments</button>
+  <button class="tab-btn sub" data-tab="serviceReports">Service Reports</button>
 </nav>
 
 <nav class="tabs tabs-sub" id="subnav-charts">
@@ -319,6 +320,28 @@
 <section class="tab-panel" id="tab-payments">
   <div class="panel-header"><h2>Payments</h2></div>
   <div id="paymentsByCompany"></div>
+</section>
+
+<!-- ===================== SERVICE REPORTS ===================== -->
+<section class="tab-panel" id="tab-serviceReports">
+  <div class="panel-header">
+    <h2>Service Reports</h2>
+    <button class="btn btn-primary" id="btnAddServiceReport">+ Create Service Report</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th class="sortable" data-sort-table="serviceReports" data-sort-key="reportNo" data-sort-type="text">Report No</th>
+          <th class="sortable" data-sort-table="serviceReports" data-sort-key="date" data-sort-type="date">Report Date</th>
+          <th class="sortable" data-sort-table="serviceReports" data-sort-key="_companyName" data-sort-type="text">Company</th>
+          <th class="sortable" data-sort-table="serviceReports" data-sort-key="serviceDate" data-sort-type="date">Date of Service</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="serviceReportsTbody"></tbody>
+    </table>
+  </div>
 </section>
 
 <!-- ===================== SUMMARY ===================== -->
@@ -846,6 +869,93 @@
       <button class="btn btn-secondary" id="invoiceDownloadBtn" style="display:none;">Download PDF</button>
       <button class="btn btn-primary" id="invoiceNextBtn">Next: Preview</button>
       <button class="btn btn-primary" id="invoiceConfirmBtn" data-mutating style="display:none;">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== SERVICE REPORT MODAL (two-step) ===================== -->
+<div class="modal-overlay" id="serviceReportModal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Create Service Report</h3>
+      <button class="modal-close" data-close="serviceReportModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="step-indicator">
+        <span class="step active" id="serviceReportStepLabel1">1. Details</span>
+        <span>&rsaquo;</span>
+        <span class="step" id="serviceReportStepLabel2">2. Preview</span>
+      </div>
+
+      <!-- Step 1: form -->
+      <div id="serviceReportStepForm">
+        <input type="hidden" id="serviceReportId">
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="serviceReportCompany">Company</label>
+            <select id="serviceReportCompany" required></select>
+          </div>
+          <div class="form-field">
+            <label for="serviceReportDate">Report Date</label>
+            <input type="date" id="serviceReportDate" required>
+          </div>
+          <div class="form-field">
+            <label for="serviceReportServiceDate">Date of Service</label>
+            <input type="date" id="serviceReportServiceDate">
+          </div>
+        </div>
+
+        <div style="margin-top:18px;">
+          <div class="panel-header" style="margin:0 0 6px;">
+            <label style="margin:0;font-size:12.5px;font-weight:600;color:var(--text-muted);">Paragraph</label>
+            <button type="button" class="btn btn-secondary btn-sm" id="serviceReportResetParagraphBtn">Reset to Template</button>
+          </div>
+          <textarea id="serviceReportParagraph" rows="4" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;" placeholder="Fill in Company and Date of Service to auto-generate this paragraph, or type your own."></textarea>
+        </div>
+
+        <div style="margin-top:18px;">
+          <div class="panel-header" style="margin:0 0 6px;">
+            <label style="margin:0;font-size:12.5px;font-weight:600;color:var(--text-muted);">Tables</label>
+          </div>
+          <div class="free-table-new-row">
+            <label>Rows <input type="number" id="serviceReportNewTableRows" min="1" max="50" value="2"></label>
+            <label>Columns <input type="number" id="serviceReportNewTableCols" min="1" max="20" value="2"></label>
+            <label><input type="checkbox" id="serviceReportNewTableHeader"> Header Row</label>
+            <button type="button" class="btn btn-secondary" id="serviceReportAddTableBtn">+ Add Table</button>
+          </div>
+          <div id="serviceReportTablesContainer"></div>
+        </div>
+
+        <div style="margin-top:18px;">
+          <label>Notes</label>
+          <table class="line-items-table" id="serviceReportNotesTable">
+            <thead>
+              <tr><th style="width:30px;">#</th><th>Note</th><th></th></tr>
+            </thead>
+            <tbody id="serviceReportNotesBody"></tbody>
+          </table>
+          <button type="button" class="btn btn-secondary" id="serviceReportAddNoteBtn">+ Add Note</button>
+        </div>
+
+        <div class="display-options">
+          <span class="display-options-label">Show on Service Report:</span>
+          <label><input type="checkbox" id="serviceReportIncludeSeal"> Company Seal</label>
+          <label><input type="checkbox" id="serviceReportIncludeSignatory"> Signatory Line (For Business Name / Authorized Signatory)</label>
+        </div>
+      </div>
+
+      <!-- Step 2: preview -->
+      <div id="serviceReportStepPreview" style="display:none;">
+        <div class="doc-preview" id="serviceReportPreviewContent"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="serviceReportModal">Cancel</button>
+      <span class="spacer"></span>
+      <button class="btn btn-secondary" id="serviceReportEditBtn" style="display:none;">Edit</button>
+      <button class="btn btn-secondary" id="serviceReportDownloadBtn" style="display:none;">Download PDF</button>
+      <button class="btn btn-primary" id="serviceReportNextBtn">Next: Preview</button>
+      <button class="btn btn-primary" id="serviceReportConfirmBtn" data-mutating style="display:none;">Confirm</button>
     </div>
   </div>
 </div>

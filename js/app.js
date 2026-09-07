@@ -77,7 +77,7 @@ document.addEventListener('click', (e) => {
 });
 
 /* ---------------- Tabs (two-level: primary + Sales/Financials sub-navs) ---------------- */
-const tabGroups = { sales: ['quotations', 'invoices', 'payments'], financials: ['summary', 'pnl', 'gst'], charts: ['companySalesChart', 'productSalesChart', 'pendingPaymentsChart', 'purchaseCompanyChart', 'expenseCategoryChart'] };
+const tabGroups = { sales: ['quotations', 'invoices', 'payments', 'serviceReports'], financials: ['summary', 'pnl', 'gst'], charts: ['companySalesChart', 'productSalesChart', 'pendingPaymentsChart', 'purchaseCompanyChart', 'expenseCategoryChart'] };
 const lastSubTab = { sales: 'quotations', financials: 'summary', charts: 'companySalesChart' };
 
 /* Admin-configurable tab layout (Settings > Tab Layout) — which of the 6
@@ -140,6 +140,7 @@ const TAB_LAZY_KEYS = {
   quotations: [STORAGE_KEYS.quotations, STORAGE_KEYS.companies],
   invoices: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
   payments: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
+  serviceReports: [STORAGE_KEYS.serviceReports, STORAGE_KEYS.companies],
   /* "Cash / Manual Expenses" is a second section inside the same #tab-purchases
      panel (see index.html), not a separate nav-activated tab — there is no
      data-tab="expenses" button anywhere, so an 'expenses' key here would never
@@ -168,6 +169,7 @@ const TAB_LOADING_TARGET = {
   companies: { selector: '#companiesTbody', colspan: 6 },
   quotations: { selector: '#quotationsTbody', colspan: 4 },
   invoices: { selector: '#invoicesTbody', colspan: 9 },
+  serviceReports: { selector: '#serviceReportsTbody', colspan: 5 },
   purchases: { selector: '#purchasesTbody', colspan: 9 },
   payments: { selector: '#paymentsByCompany' },
 };
@@ -212,6 +214,7 @@ async function activateTab(tabId) {
   if (tabId === 'quotations') renderQuotations();
   if (tabId === 'invoices') renderInvoices();
   if (tabId === 'payments') renderPayments();
+  if (tabId === 'serviceReports') renderServiceReports();
   if (tabId === 'purchases') { renderPurchases(); renderPurchasesByCompany(); renderExpenses(); }
   if (tabId === 'summary') renderSummary();
   if (tabId === 'pnl') renderProfitLoss();
@@ -473,10 +476,10 @@ function renderProducts() {
         <td>${escapeHtml(p.unit)}</td>
         <td>${fmt(p.rate)}</td>
         <td>${p.gstPercent}%</td>
-        <td class="actions-cell">
+        <td><div class="actions-cell">
           <button class="btn btn-secondary btn-sm" data-edit-product="${p.id}">Edit</button>
           <button class="btn btn-danger btn-sm" data-delete-product="${p.id}">Delete</button>
-        </td>
+        </div></td>
       </tr>
     `).join('');
   }
@@ -592,10 +595,10 @@ function renderCompanies() {
         <td>${escapeHtml(c.gstin || '')}</td>
         <td>Net ${Number(c.paymentTermsDays) || 0} days</td>
         <td>${companyTypeBadges(c)}</td>
-        <td class="actions-cell">
+        <td><div class="actions-cell">
           <button class="btn btn-secondary btn-sm" data-edit-company="${c.id}">Edit</button>
           <button class="btn btn-danger btn-sm" data-delete-company="${c.id}">Delete</button>
-        </td>
+        </div></td>
       </tr>
     `).join('');
   }
@@ -900,12 +903,12 @@ async function renderUserConfigTable() {
       <tr>
         <td>${escapeHtml(p.username)}</td>
         <td>${p.isAdmin ? '<span class="badge badge-success">Admin</span>' : p.isViewer ? '<span class="badge badge-muted">Viewer</span>' : '<span class="badge badge-muted">User</span>'}</td>
-        <td class="actions-cell">
+        <td><div class="actions-cell">
           <button class="btn btn-secondary btn-sm" data-reset-user="${escapeHtml(p.username)}">Reset Password</button>
           <button class="btn btn-secondary btn-sm" data-toggle-admin-user="${escapeHtml(p.username)}" data-current-admin="${p.isAdmin}">${p.isAdmin ? 'Revoke Admin' : 'Make Admin'}</button>
           <button class="btn btn-secondary btn-sm" data-toggle-viewer-user="${escapeHtml(p.username)}" data-current-viewer="${p.isViewer}">${p.isViewer ? 'Remove Viewer' : 'Make Viewer'}</button>
           <button class="btn btn-danger btn-sm" data-delete-user="${escapeHtml(p.username)}">Delete</button>
-        </td>
+        </div></td>
       </tr>
     `).join('');
   } catch (e) {
@@ -1107,6 +1110,7 @@ function populateCompanyDropdowns(preserveIds) {
   buildSelect($('#quotationCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.quotation);
   buildSelect($('#invoiceCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.invoice);
   buildSelect($('#purchaseCompany'), c => c.isPurchaseCompany, '-- Select Purchase Company --', preserveIds.purchase);
+  buildSelect($('#serviceReportCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.serviceReport);
 }
 
 function populateProductPicker(selectEl) {
@@ -1118,7 +1122,7 @@ function populateProductPicker(selectEl) {
 /* =====================================================================
    Quotation / Invoice shared line-item + totals engine
 ===================================================================== */
-const draft = { quotation: { items: [] }, invoice: { items: [] }, purchase: { items: [] } };
+const draft = { quotation: { items: [] }, invoice: { items: [] }, purchase: { items: [] }, serviceReport: { tables: [], notes: [] } };
 
 function companiesStoreForKind(kind) {
   const companies = Store.getCompanies();
@@ -1257,11 +1261,11 @@ function renderQuotations() {
       <td>${escapeHtml(q.quotationNo)}</td>
       <td>${fmtDateShort(q.date)}</td>
       <td>${escapeHtml(q._companyName)}</td>
-      <td class="actions-cell">
+      <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-quotation="${q.id}">Edit</button>
         <button class="btn btn-secondary btn-sm" data-pdf-quotation="${q.id}">Download PDF</button>
         <button class="btn btn-danger btn-sm" data-delete-quotation="${q.id}">Delete</button>
-      </td>
+      </div></td>
     </tr>
   `).join('');
   updateSortIndicators('quotations');
@@ -1406,6 +1410,20 @@ function buildDocDataFromDraft(kind, extra) {
   return [docData, company];
 }
 
+/* Shared "For {business name}" / seal (image or placeholder) / "Authorized
+   Signatory" preview block — used by both the Invoice preview and the
+   Service Report preview, so the two stay visually consistent. */
+function buildSealSignatoryHtml(profile, includeSeal, includeSignatory) {
+  const sealBoxHtml = includeSeal ? `<div class="seal-box">${profile.sealDataUrl ? `<img src="${profile.sealDataUrl}">` : 'Company Seal'}</div>` : '';
+  if (!includeSignatory) return sealBoxHtml;
+  return `
+      <div class="seal-wrap">
+        <div class="seal-caption">For ${escapeHtml(profile.name || 'Business Name')}</div>
+        ${sealBoxHtml}
+        <div class="seal-caption">Authorized Signatory</div>
+      </div>`;
+}
+
 function renderDocPreview(container, docData, company, docTitle, isInvoice) {
   const profile = Store.getProfile();
   const interState = isInterState(profile.gstin, company ? company.gstin : '');
@@ -1445,13 +1463,7 @@ function renderDocPreview(container, docData, company, docTitle, isInvoice) {
   if (isInvoice) {
     const includeSeal = docData.includeSeal !== false;
     const includeSignatory = docData.includeSignatory !== false;
-    const sealBoxHtml = includeSeal ? `<div class="seal-box">${profile.sealDataUrl ? `<img src="${profile.sealDataUrl}">` : 'Company Seal'}</div>` : '';
-    const signatoryHtml = includeSignatory ? `
-      <div class="seal-wrap">
-        <div class="seal-caption">For ${escapeHtml(profile.name || 'Business Name')}</div>
-        ${sealBoxHtml}
-        <div class="seal-caption">Authorized Signatory</div>
-      </div>` : sealBoxHtml;
+    const signatoryHtml = buildSealSignatoryHtml(profile, includeSeal, includeSignatory);
     bankHtml = `
       <div class="doc-footer-block">
         <div>
@@ -1641,11 +1653,11 @@ function renderInvoices() {
       <td>${fmt(inv._gst)}</td>
       <td>${fmt(inv.total)}</td>
       <td>${paymentStatusBadge(inv)}</td>
-      <td class="actions-cell">
+      <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-invoice="${inv.id}">Edit</button>
         <button class="btn btn-secondary btn-sm" data-pdf-invoice="${inv.id}">Download PDF</button>
         <button class="btn btn-danger btn-sm" data-delete-invoice="${inv.id}">Delete</button>
-      </td>
+      </div></td>
     </tr>
   `).join('');
   updateSortIndicators('invoices');
@@ -1868,6 +1880,375 @@ document.addEventListener('click', withErrorToast((e) => {
 }));
 
 /* =====================================================================
+   SERVICE REPORTS
+===================================================================== */
+function renderServiceReports() {
+  const tbody = $('#serviceReportsTbody');
+  let reports = Store.getServiceReports().map(r => Object.assign({}, r, { _companyName: companyName(r.companyId) }));
+  reports = sortState.serviceReports ? sortRows(reports, 'serviceReports') : reports.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  if (!reports.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">No service reports yet.</td></tr>`;
+    updateSortIndicators('serviceReports');
+    return;
+  }
+  tbody.innerHTML = reports.map(r => `
+    <tr>
+      <td>${escapeHtml(r.reportNo)}</td>
+      <td>${fmtDateShort(r.date)}</td>
+      <td>${escapeHtml(r._companyName)}</td>
+      <td>${r.serviceDate ? fmtDateShort(r.serviceDate) : ''}</td>
+      <td><div class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-serviceReport="${r.id}">Edit</button>
+        <button class="btn btn-secondary btn-sm" data-pdf-serviceReport="${r.id}">Download PDF</button>
+        <button class="btn btn-danger btn-sm" data-delete-serviceReport="${r.id}">Delete</button>
+      </div></td>
+    </tr>
+  `).join('');
+  updateSortIndicators('serviceReports');
+}
+
+/* ---- Free-form, user-configurable tables ----
+   No existing pattern to copy: unlike the fixed-column line-items table or
+   the one-textarea-per-row Terms & Conditions list, a Service Report can
+   carry any number of tables, each with a user-chosen row/column count and
+   fully free-text cells. Resize preserves existing cell content by
+   [row][col] index (pads new cells with '', truncates removed ones) rather
+   than wiping the table. */
+function makeEmptyFreeTable(rows, cols, hasHeader) {
+  return { rows, cols, hasHeader: !!hasHeader, data: Array.from({ length: rows }, () => Array.from({ length: cols }, () => '')) };
+}
+
+function resizeFreeTableData(table, newRows, newCols) {
+  const data = [];
+  for (let r = 0; r < newRows; r++) {
+    const row = [];
+    for (let c = 0; c < newCols; c++) row.push(table.data[r] && table.data[r][c] !== undefined ? table.data[r][c] : '');
+    data.push(row);
+  }
+  table.rows = newRows;
+  table.cols = newCols;
+  table.data = data;
+}
+
+function renderServiceReportTables() {
+  const container = $('#serviceReportTablesContainer');
+  const tables = draft.serviceReport.tables;
+  if (!tables.length) {
+    container.innerHTML = `<p style="color:var(--text-muted);font-size:12.5px;margin:4px 0;">No tables added yet.</p>`;
+    return;
+  }
+  container.innerHTML = tables.map((t, tIdx) => `
+    <div class="free-table-block">
+      <div class="free-table-toolbar">
+        <strong>Table ${tIdx + 1}</strong>
+        <label>Rows <input type="number" min="1" max="50" value="${t.rows}" data-table-rows="${tIdx}"></label>
+        <label>Columns <input type="number" min="1" max="20" value="${t.cols}" data-table-cols="${tIdx}"></label>
+        <button type="button" class="btn btn-secondary btn-sm" data-resize-table="${tIdx}">Resize</button>
+        <label><input type="checkbox" data-header-toggle="${tIdx}" ${t.hasHeader ? 'checked' : ''}> Header Row</label>
+        <button type="button" class="btn btn-danger btn-sm" data-remove-table="${tIdx}">Remove Table</button>
+      </div>
+      <table class="free-table-grid"><tbody>
+        ${t.data.map((row, rIdx) => `<tr class="${t.hasHeader && rIdx === 0 ? 'header-row' : ''}">${row.map((cell, cIdx) => `
+          <td><textarea data-cell-table="${tIdx}" data-cell-row="${rIdx}" data-cell-col="${cIdx}">${escapeHtml(cell)}</textarea></td>`).join('')}</tr>`).join('')}
+      </tbody></table>
+    </div>`).join('');
+}
+
+document.addEventListener('input', (e) => {
+  if (!e.target.hasAttribute('data-cell-table')) return;
+  const tIdx = Number(e.target.getAttribute('data-cell-table'));
+  const rIdx = Number(e.target.getAttribute('data-cell-row'));
+  const cIdx = Number(e.target.getAttribute('data-cell-col'));
+  draft.serviceReport.tables[tIdx].data[rIdx][cIdx] = e.target.value;
+});
+
+document.addEventListener('click', withErrorToast((e) => {
+  if (e.target.hasAttribute('data-resize-table')) {
+    const tIdx = Number(e.target.getAttribute('data-resize-table'));
+    const table = draft.serviceReport.tables[tIdx];
+    const newRows = Math.max(1, Math.min(50, Number($(`[data-table-rows="${tIdx}"]`).value) || table.rows));
+    const newCols = Math.max(1, Math.min(20, Number($(`[data-table-cols="${tIdx}"]`).value) || table.cols));
+    resizeFreeTableData(table, newRows, newCols);
+    renderServiceReportTables();
+  }
+  if (e.target.hasAttribute('data-remove-table')) {
+    if (!confirm('Remove this table?')) return;
+    draft.serviceReport.tables.splice(Number(e.target.getAttribute('data-remove-table')), 1);
+    renderServiceReportTables();
+  }
+}));
+
+document.addEventListener('change', (e) => {
+  if (!e.target.hasAttribute('data-header-toggle')) return;
+  const tIdx = Number(e.target.getAttribute('data-header-toggle'));
+  draft.serviceReport.tables[tIdx].hasHeader = e.target.checked;
+  renderServiceReportTables();
+});
+
+$('#serviceReportAddTableBtn').addEventListener('click', () => {
+  const rows = Math.max(1, Math.min(50, Number($('#serviceReportNewTableRows').value) || 2));
+  const cols = Math.max(1, Math.min(20, Number($('#serviceReportNewTableCols').value) || 2));
+  const hasHeader = $('#serviceReportNewTableHeader').checked;
+  draft.serviceReport.tables.push(makeEmptyFreeTable(rows, cols, hasHeader));
+  renderServiceReportTables();
+});
+
+/* ---- Notes (numbered) ----
+   1:1 copy of the Terms & Conditions dynamic-list pattern — one textarea per
+   note plus a remove button, "+ Add Note" appends a blank one and focuses it. */
+function renderServiceReportNotes() {
+  const tbody = $('#serviceReportNotesBody');
+  const notes = draft.serviceReport.notes || [];
+  if (!notes.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">No notes added.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = notes.map((n, idx) => `
+    <tr>
+      <td>${idx + 1}</td>
+      <td><textarea data-note-field data-note-idx="${idx}">${escapeHtml(n)}</textarea></td>
+      <td><button type="button" class="remove-line" data-remove-note="${idx}">&times;</button></td>
+    </tr>`).join('');
+}
+
+document.addEventListener('input', (e) => {
+  if (!e.target.hasAttribute('data-note-field')) return;
+  draft.serviceReport.notes[Number(e.target.getAttribute('data-note-idx'))] = e.target.value;
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.hasAttribute('data-remove-note')) return;
+  draft.serviceReport.notes.splice(Number(e.target.getAttribute('data-remove-note')), 1);
+  renderServiceReportNotes();
+});
+
+$('#serviceReportAddNoteBtn').addEventListener('click', () => {
+  draft.serviceReport.notes = draft.serviceReport.notes || [];
+  draft.serviceReport.notes.push('');
+  renderServiceReportNotes();
+  const areas = $$('#serviceReportNotesBody textarea');
+  if (areas.length) areas[areas.length - 1].focus();
+});
+
+/* ---- Paragraph auto-fill-once ----
+   Fills the template exactly once, the first time Company/Date of Service are
+   both present, then never touches it again even if those fields later
+   change — protects any manual edits. "Reset to Template" regenerates on
+   demand and re-arms nothing further (it always overwrites). */
+function serviceReportParagraphTemplate() {
+  const serviceDate = $('#serviceReportServiceDate').value;
+  const dateClause = serviceDate ? ` on Dt: ${fmtDateShort(serviceDate)}` : '';
+  return `With reference to the service performed${dateClause}.`;
+}
+
+let serviceReportParagraphAutoFilled = false;
+
+function maybeAutoFillServiceReportParagraph() {
+  if (serviceReportParagraphAutoFilled) return;
+  const ready = $('#serviceReportCompany').value && $('#serviceReportServiceDate').value;
+  if (!ready) return;
+  $('#serviceReportParagraph').value = serviceReportParagraphTemplate();
+  serviceReportParagraphAutoFilled = true;
+}
+['serviceReportCompany', 'serviceReportServiceDate'].forEach(id =>
+  $('#' + id).addEventListener('change', maybeAutoFillServiceReportParagraph));
+
+$('#serviceReportResetParagraphBtn').addEventListener('click', () => {
+  $('#serviceReportParagraph').value = serviceReportParagraphTemplate();
+  serviceReportParagraphAutoFilled = true;
+});
+
+function resetServiceReportModal() {
+  draft.serviceReport = { tables: [], notes: [] };
+  serviceReportParagraphAutoFilled = false;
+  $('#serviceReportId').value = '';
+  $('#serviceReportDate').value = todayISO();
+  populateCompanyDropdowns();
+  $('#serviceReportCompany').value = '';
+  $('#serviceReportServiceDate').value = '';
+  $('#serviceReportParagraph').value = '';
+  $('#serviceReportIncludeSeal').checked = true;
+  $('#serviceReportIncludeSignatory').checked = true;
+  renderServiceReportTables();
+  renderServiceReportNotes();
+  showServiceReportStep('form');
+}
+
+function showServiceReportStep(step) {
+  const isForm = step === 'form';
+  $('#serviceReportStepForm').style.display = isForm ? '' : 'none';
+  $('#serviceReportStepPreview').style.display = isForm ? 'none' : '';
+  $('#serviceReportStepLabel1').classList.toggle('active', isForm);
+  $('#serviceReportStepLabel2').classList.toggle('active', !isForm);
+  $('#serviceReportNextBtn').style.display = isForm ? '' : 'none';
+  $('#serviceReportEditBtn').style.display = isForm ? 'none' : '';
+  $('#serviceReportDownloadBtn').style.display = isForm ? 'none' : '';
+  $('#serviceReportConfirmBtn').style.display = isForm ? 'none' : '';
+}
+
+$('#btnAddServiceReport').addEventListener('click', () => {
+  if (!Store.getCompanies().some(c => c.isSalesCompany)) { toast('Add at least one company first'); return; }
+  resetServiceReportModal();
+  openModal('serviceReportModal');
+});
+
+function getServiceReportNoForDraft() {
+  const existingId = $('#serviceReportId').value;
+  if (existingId) {
+    const existing = Store.getServiceReports().find(r => r.id === existingId);
+    return existing ? existing.reportNo : getNextServiceReportNo();
+  }
+  return getNextServiceReportNo();
+}
+
+function buildServiceReportDraftDoc(extra) {
+  const companyId = $('#serviceReportCompany').value;
+  const company = companiesStoreForKind('serviceReport').find(c => c.id === companyId);
+  const profile = Store.getProfile();
+  const docData = Object.assign({
+    id: $('#serviceReportId').value || undefined,
+    companyId,
+    date: $('#serviceReportDate').value,
+    serviceDate: $('#serviceReportServiceDate').value,
+    paragraph: $('#serviceReportParagraph').value,
+    tables: JSON.parse(JSON.stringify(draft.serviceReport.tables)),
+    notes: (draft.serviceReport.notes || []).slice(),
+    includeSeal: $('#serviceReportIncludeSeal').checked,
+    includeSignatory: $('#serviceReportIncludeSignatory').checked,
+    billToSnapshot: company ? { name: company.name, address: company.address || '', gstin: company.gstin || '' } : null,
+    profileSnapshot: { name: profile.name || '', address: profile.address || '', gstin: profile.gstin || '' },
+  }, extra || {});
+  return [docData, company];
+}
+
+function getServiceReportDraftDoc() {
+  return buildServiceReportDraftDoc({ reportNo: getServiceReportNoForDraft() });
+}
+
+function renderServiceReportPreview(container, docData, company) {
+  const profile = Store.getProfile();
+  const includeSeal = docData.includeSeal !== false;
+  const includeSignatory = docData.includeSignatory !== false;
+  const signatoryHtml = buildSealSignatoryHtml(profile, includeSeal, includeSignatory);
+  const tablesHtml = (docData.tables || []).map(t => `
+    <table class="doc-free-table"><tbody>
+      ${t.data.map((row, rIdx) => `<tr class="${t.hasHeader && rIdx === 0 ? 'header-row' : ''}">${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}
+    </tbody></table>`).join('');
+  const notesHtml = (docData.notes && docData.notes.length) ? `
+    <div class="doc-terms">
+      <div class="doc-terms-title">Notes</div>
+      <ol>${docData.notes.map(n => `<li>${escapeHtml(n)}</li>`).join('')}</ol>
+    </div>` : '';
+  container.innerHTML = `
+    <div class="doc-head">
+      <div class="doc-head-left">
+        ${profile.logoDataUrl ? `<img class="doc-logo" src="${profile.logoDataUrl}">` : ''}
+        <div>
+          <div class="biz-title">${escapeHtml(profile.name || 'Your Business Name')}</div>
+          <div>${escapeHtml(profile.address || '')}</div>
+          ${profile.gstin ? `<div>GSTIN: ${escapeHtml(profile.gstin)}</div>` : ''}
+        </div>
+      </div>
+      <div class="doc-head-right">
+        <div class="doc-title">SERVICE REPORT</div>
+        <div>Report No: ${escapeHtml(docData.reportNo || '(will be assigned)')}</div>
+        <div>Report Date: ${fmtDateShort(docData.date)}</div>
+        <div>Date of Service: ${docData.serviceDate ? fmtDateShort(docData.serviceDate) : ''}</div>
+      </div>
+    </div>
+    <div class="bill-to">
+      <h4>To</h4>
+      <div>${escapeHtml(company ? company.name : '')}</div>
+      <div>${escapeHtml(company ? company.address || '' : '')}</div>
+      ${company && company.gstin ? `<div>GSTIN: ${escapeHtml(company.gstin)}</div>` : ''}
+    </div>
+    <div class="doc-paragraph">${escapeHtml(docData.paragraph || '').replace(/\n/g, '<br>')}</div>
+    ${tablesHtml}
+    ${notesHtml}
+    <div class="doc-footer-block" style="justify-content:flex-end;">${signatoryHtml}</div>
+    <div class="doc-address-footer">${escapeHtml(profile.name || '')} — ${escapeHtml(profile.address || '')}</div>
+  `;
+}
+
+function serviceReportHasContent() {
+  const paragraphFilled = $('#serviceReportParagraph').value.trim().length > 0;
+  const notesFilled = (draft.serviceReport.notes || []).some(n => n.trim().length > 0);
+  const tablesFilled = (draft.serviceReport.tables || []).some(t => t.data.some(row => row.some(cell => cell.trim().length > 0)));
+  return paragraphFilled || notesFilled || tablesFilled;
+}
+
+$('#serviceReportNextBtn').addEventListener('click', () => {
+  if (!$('#serviceReportCompany').value) { toast('Select a company'); return; }
+  if (!$('#serviceReportDate').value) { toast('Report Date is required'); return; }
+  if (!serviceReportHasContent()) { toast('Add a Paragraph, a Table, or a Note before continuing'); return; }
+  const [docData, company] = getServiceReportDraftDoc();
+  renderServiceReportPreview($('#serviceReportPreviewContent'), docData, company);
+  showServiceReportStep('preview');
+});
+
+$('#serviceReportEditBtn').addEventListener('click', () => showServiceReportStep('form'));
+
+$('#serviceReportDownloadBtn').addEventListener('click', () => {
+  const [docData, company] = getServiceReportDraftDoc();
+  const doc = buildServiceReportPdf(docData, company, Store.getProfile());
+  doc.save(`${docData.reportNo.replace(/\//g, '-')}.pdf`);
+});
+
+$('#serviceReportConfirmBtn').addEventListener('click', withErrorToast(async () => {
+  if (blockIfViewer()) return;
+  const isNew = !$('#serviceReportId').value;
+  if (!ensureEditingRecordExists('serviceReport', $('#serviceReportId').value, Store.getServiceReports())) return;
+  const [docData] = getServiceReportDraftDoc();
+  if (isNew) {
+    docData.reportNo = await guardAgainstNumberCollision(
+      [STORAGE_KEYS.serviceReports], docData.reportNo,
+      () => Store.getServiceReports().map(r => r.reportNo),
+      getNextServiceReportNo, 'Service Report No'
+    );
+  }
+  Store.saveServiceReport(docData);
+  closeModal('serviceReportModal');
+  renderServiceReports();
+  toast('Service Report saved');
+}));
+
+document.addEventListener('click', withErrorToast((e) => {
+  const editId = e.target.getAttribute && e.target.getAttribute('data-edit-serviceReport');
+  if (editId) {
+    const r = Store.getServiceReports().find(x => x.id === editId);
+    draft.serviceReport = {
+      tables: JSON.parse(JSON.stringify(r.tables || [])),
+      notes: JSON.parse(JSON.stringify(r.notes || [])),
+    };
+    serviceReportParagraphAutoFilled = true; // never clobber an already-saved paragraph
+    $('#serviceReportId').value = r.id;
+    $('#serviceReportDate').value = r.date;
+    $('#serviceReportServiceDate').value = r.serviceDate || '';
+    $('#serviceReportParagraph').value = r.paragraph || '';
+    $('#serviceReportIncludeSeal').checked = r.includeSeal !== false;
+    $('#serviceReportIncludeSignatory').checked = r.includeSignatory !== false;
+    populateCompanyDropdowns({ serviceReport: r.companyId });
+    $('#serviceReportCompany').value = r.companyId;
+    renderServiceReportTables();
+    renderServiceReportNotes();
+    showServiceReportStep('form');
+    openModal('serviceReportModal');
+  }
+  const pdfId = e.target.getAttribute && e.target.getAttribute('data-pdf-serviceReport');
+  if (pdfId) {
+    const r = Store.getServiceReports().find(x => x.id === pdfId);
+    const doc = buildServiceReportPdf(r, resolveBillToCompany(r), resolveDocProfile(r));
+    doc.save(`${r.reportNo.replace(/\//g, '-')}.pdf`);
+  }
+  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-serviceReport');
+  if (delId) {
+    if (blockIfViewer()) return;
+    if (blockDeleteIfNotAdmin()) return;
+    if (confirm('Delete this service report?')) { Store.deleteServiceReport(delId); renderServiceReports(); toast('Service Report deleted'); }
+  }
+}));
+
+/* =====================================================================
    PURCHASES
 ===================================================================== */
 function purchasePaymentBadge(p) {
@@ -1921,10 +2302,10 @@ function renderPurchases() {
         <td>${fmt(p.total)}</td>
         <td>${purchasePaymentBadge(p)}</td>
         <td class="truncate-cell" title="${escapeHtml(p.paymentNote || '')}">${escapeHtml(p.paymentNote || '-')}</td>
-        <td class="actions-cell">
+        <td><div class="actions-cell">
           <button class="btn btn-secondary btn-sm" data-edit-purchase="${p.id}">Edit</button>
           <button class="btn btn-danger btn-sm" data-delete-purchase="${p.id}">Delete</button>
-        </td>
+        </div></td>
       </tr>
     `).join('');
   }
@@ -2133,10 +2514,10 @@ function renderExpenses() {
         <td>${escapeHtml(e.category)}</td>
         <td>${escapeHtml(e.description || '')}</td>
         <td>${fmt(e.amount)}</td>
-        <td class="actions-cell">
+        <td><div class="actions-cell">
           <button class="btn btn-secondary btn-sm" data-edit-expense="${e.id}">Edit</button>
           <button class="btn btn-danger btn-sm" data-delete-expense="${e.id}">Delete</button>
-        </td>
+        </div></td>
       </tr>
     `).join('');
   }
@@ -2231,10 +2612,10 @@ function renderConfigTable(type) {
   tbody.innerHTML = rows.map(r => `
     <tr>
       <td>${escapeHtml(String(r[cfg.field]))}${cfg.field === 'value' ? '%' : ''}</td>
-      <td class="actions-cell">
+      <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-config-type="${type}" data-edit-config-id="${r.id}">Edit</button>
         <button class="btn btn-danger btn-sm" data-delete-config-type="${type}" data-delete-config-id="${r.id}">Delete</button>
-      </td>
+      </div></td>
     </tr>`).join('');
 }
 function renderUnitsConfig() { renderConfigTable('unit'); }
@@ -2357,9 +2738,9 @@ function paymentInvoiceRow(inv) {
       <td>${pay.received ? fmtDateShort(pay.paymentDate) : '-'}</td>
       <td>${expectedPaymentDate(inv)}</td>
       <td>${paymentStatusBadge(inv)}</td>
-      <td class="actions-cell">
+      <td><div class="actions-cell">
         <button class="btn btn-success btn-sm" data-record-payment="${inv.id}">${pay.received ? 'Edit Payment' : 'Record Payment'}</button>
-      </td>
+      </div></td>
     </tr>`;
 }
 
@@ -3480,6 +3861,7 @@ Object.assign(SORT_RENDER_FNS, {
   companies: renderCompanies,
   quotations: renderQuotations,
   invoices: renderInvoices,
+  serviceReports: renderServiceReports,
   purchases: renderPurchases,
   purchasesByCompany: renderPurchasesByCompany,
   expenses: renderExpenses,

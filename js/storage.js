@@ -14,6 +14,7 @@ const STORAGE_KEYS = {
   expenseCategories: 'qb_expenseCategories',
   termsTemplates: 'qb_termsTemplates',
   tabLayout: 'qb_tabLayout',
+  serviceReports: 'qb_serviceReports',
 };
 
 function uid() {
@@ -42,7 +43,7 @@ let supabaseData = {};
    ("core") is small, needed by helpers that run unconditionally at init()
    regardless of which tab is active (dropdowns, config pick-lists, profile),
    and stays eagerly loaded once at login exactly like before. */
-const LAZY_SUPABASE_KEYS = [STORAGE_KEYS.quotations, STORAGE_KEYS.invoices, STORAGE_KEYS.purchases, STORAGE_KEYS.expenses];
+const LAZY_SUPABASE_KEYS = [STORAGE_KEYS.quotations, STORAGE_KEYS.invoices, STORAGE_KEYS.purchases, STORAGE_KEYS.expenses, STORAGE_KEYS.serviceReports];
 const CORE_SUPABASE_KEYS = Object.values(STORAGE_KEYS).filter((k) => k !== STORAGE_KEYS.purchaseCompanies && !LAZY_SUPABASE_KEYS.includes(k));
 
 /* Every real entity key, i.e. every business-data key that actually gets
@@ -222,6 +223,26 @@ const Store = {
   deleteInvoice(id) {
     assertCanDelete();
     writeList(STORAGE_KEYS.invoices, readList(STORAGE_KEYS.invoices).filter(i => i.id !== id));
+  },
+
+  // Service Reports
+  getServiceReports() { return readList(STORAGE_KEYS.serviceReports); },
+  saveServiceReport(report) {
+    const list = readList(STORAGE_KEYS.serviceReports);
+    if (report.id) {
+      const idx = list.findIndex(x => x.id === report.id);
+      if (idx >= 0) { list[idx] = report; }
+    } else {
+      report.id = uid();
+      report.createdAt = new Date().toISOString();
+      list.push(report);
+    }
+    writeList(STORAGE_KEYS.serviceReports, list);
+    return report;
+  },
+  deleteServiceReport(id) {
+    assertCanDelete();
+    writeList(STORAGE_KEYS.serviceReports, readList(STORAGE_KEYS.serviceReports).filter(r => r.id !== id));
   },
 
   // Purchases

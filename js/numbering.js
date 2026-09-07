@@ -122,3 +122,17 @@ function getNextChallanNo() {
   }
   return `CH/${fy}/001`;
 }
+
+/** Next Service Report number for the current FY — same "scan for highest existing" pattern as getNextInvoiceNo. */
+function getNextServiceReportNo() {
+  const fy = currentFinancialYear();
+  const prefix = `SR/${fy}/`;
+  let maxSeq = 0;
+  Store.getServiceReports().forEach(r => {
+    if (r.reportNo && r.reportNo.startsWith(prefix)) {
+      const seq = extractSeq(r.reportNo);
+      if (seq !== null && seq > maxSeq) maxSeq = seq;
+    }
+  });
+  return `${prefix}${pad3(maxSeq + 1)}`;
+}

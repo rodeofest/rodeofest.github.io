@@ -269,7 +269,7 @@ tbody tr:hover { background: #fafbff; }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(47,111,237,0.12);
 }
-.form-field textarea { resize: vertical; min-height: 60px; }
+.form-field textarea { width: 100%; resize: vertical; min-height: 60px; }
 .form-hint { font-size: 11.5px; color: var(--text-muted); }
 .checkbox-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; padding-top: 4px; }
 .checkbox-row label { display: flex; align-items: center; gap: 6px; font-weight: 400; font-size: 13.5px; color: var(--text); cursor: pointer; }
@@ -301,6 +301,31 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
   border: none; background: none; color: var(--accent); font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 4px 6px;
 }
 .table-filters .filter-clear:hover { text-decoration: underline; }
+
+/* ---- Table pagination (Prev/Next + page-size, below a table's <tbody>) ---- */
+.table-pagination {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: #fafbff;
+}
+.table-pagination:empty { display: none; }
+.pagination-info { font-size: 12.5px; color: var(--text-muted); }
+.pagination-controls { display: flex; align-items: center; gap: 8px; }
+.pagination-size {
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; background: #fff;
+}
+.pagination-page { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; }
+.table-pagination .btn-icon {
+  border: 1px solid var(--border); background: var(--card-bg); border-radius: 4px;
+  width: 26px; height: 24px; cursor: pointer; font-size: 13px; line-height: 1;
+}
+.table-pagination .btn-icon:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Accordion-nested pagination bars sit inside .accordion-body, right below the
+   nested <table> — no top border needed there since the table already has its
+   own visual boundary; keep the same layout otherwise. */
+.accordion-body .table-pagination { border-top: none; background: none; padding: 8px 0 0; }
 
 /* ---- Data folder connection gate (blocks the app until a file is connected) ---- */
 .file-gate-overlay {
@@ -366,7 +391,7 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
 .line-items-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
 .line-items-table th { text-align: left; padding: 6px 8px; color: var(--text-muted); font-size: 11.5px; }
 .line-items-table td { padding: 4px 6px; }
-.line-items-table input, .line-items-table select { width: 100%; padding: 6px 7px; border: 1px solid var(--border); border-radius: 5px; font-size: 12.5px; }
+.line-items-table input, .line-items-table select, .line-items-table textarea { width: 100%; padding: 6px 7px; border: 1px solid var(--border); border-radius: 5px; font-size: 12.5px; }
 .line-items-table .num-col { width: 90px; min-width: 90px; }
 .line-items-table .product-col { min-width: 220px; }
 .line-items-table .remove-line { color: var(--danger); background: none; border: none; cursor: pointer; font-size: 16px; }
@@ -387,7 +412,7 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
 .free-table-toolbar input[type="number"] { width: 60px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 5px; }
 .free-table-grid { border-collapse: collapse; }
 .free-table-grid td { border: 1px solid var(--border); padding: 2px; }
-.free-table-grid textarea { width: 140px; min-height: 34px; padding: 5px 6px; border: none; resize: vertical; font-size: 12.5px; font-family: inherit; }
+.free-table-grid textarea { width: 100%; min-height: 34px; padding: 5px 6px; border: none; resize: vertical; font-size: 12.5px; font-family: inherit; }
 .free-table-grid textarea:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
 .free-table-grid tr.header-row textarea { font-weight: 700; background: #eef1f8; }
 
@@ -439,9 +464,12 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
 .doc-preview .seal-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .doc-preview .seal-caption { font-size: 11px; color: var(--text); }
 .doc-preview .doc-address-footer { text-align: center; font-size: 11px; color: var(--text-muted); margin-top: 16px; border-top: 1px dotted var(--border); padding-top: 8px; }
+.doc-preview .addr-chunk { white-space: nowrap; }
 .doc-preview .doc-terms { margin-top: 14px; padding-top: 10px; border-top: 1px dotted var(--border); font-size: 11.5px; color: var(--text-muted); }
 .doc-preview .doc-terms-title { font-weight: 600; color: var(--text); margin-bottom: 4px; text-transform: uppercase; font-size: 11px; }
 .doc-preview .doc-terms ol { margin: 0; padding-left: 18px; }
+.doc-preview .doc-heading-center { font-weight: 700; font-size: 14px; text-align: center; margin: 2px 0 10px; }
+.doc-preview .doc-service-date { font-size: 12.5px; margin-bottom: 10px; }
 .doc-preview .doc-paragraph { white-space: pre-wrap; margin-bottom: 14px; font-size: 12.5px; line-height: 1.5; }
 .doc-preview .doc-free-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; table-layout: auto; }
 .doc-preview .doc-free-table td { border: 1px solid var(--border); padding: 6px 8px; font-size: 12px; vertical-align: top; word-wrap: break-word; }
@@ -497,6 +525,11 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
   padding: 6px 14px; font-size: 12.5px; font-weight: 600; border-radius: 5px; cursor: pointer;
 }
 .seg-btn.active { background: #fff; color: var(--accent); box-shadow: var(--shadow); }
+
+.chart-fy-row { display: flex; }
+.chart-fy-row select {
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; background: #fff;
+}
 
 /* ---- Payment inline form ---- */
 .payment-form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 8px; padding: 12px; background: #fafbff; border: 1px solid var(--border); border-radius: 8px; }

@@ -13,8 +13,10 @@ const STORAGE_KEYS = {
   gstRates: 'qb_gstRates',
   expenseCategories: 'qb_expenseCategories',
   termsTemplates: 'qb_termsTemplates',
+  amcTermsTemplates: 'qb_amcTermsTemplates',
   tabLayout: 'qb_tabLayout',
   serviceReports: 'qb_serviceReports',
+  emailTemplates: 'qb_emailTemplates',
 };
 
 function uid() {
@@ -168,7 +170,7 @@ const Store = {
     return readObject(STORAGE_KEYS.profile, {
       name: '', address: '', gstin: '', logoDataUrl: '',
       bankName: '', bankAccountNo: '', bankIFSC: '', bankBranch: '', sealDataUrl: '',
-      footerText: '', logoWidthPx: null, logoHeightPx: null,
+      footerText: '', logoWidthPx: null, logoHeightPx: null, nameColor: '',
     });
   },
   saveProfile(profile) {
@@ -183,6 +185,26 @@ const Store = {
   saveTabLayout(layout) {
     writeObject(STORAGE_KEYS.tabLayout, layout);
     return layout;
+  },
+
+  // Email Templates (singleton) — fixed, literally-static Subject/Body text per
+  // document type, reused verbatim on every "Send Email" click; no placeholder
+  // substitution. `enabled` is a master on/off switch for the whole feature,
+  // app-wide (defaults false so a fresh deploy doesn't show an unconfigured
+  // button). businessEmail is stored for the admin's own reference only — it
+  // has no automatic behavioral effect.
+  getEmailTemplates() {
+    return readObject(STORAGE_KEYS.emailTemplates, {
+      enabled: false,
+      businessEmail: '',
+      invoice: { subject: '', body: '' },
+      quotation: { subject: '', body: '' },
+      serviceReport: { subject: '', body: '' },
+    });
+  },
+  saveEmailTemplates(templates) {
+    writeObject(STORAGE_KEYS.emailTemplates, templates);
+    return templates;
   },
 
   // Quotations
@@ -360,6 +382,25 @@ const Store = {
     assertCanDelete();
     writeList(STORAGE_KEYS.termsTemplates, readList(STORAGE_KEYS.termsTemplates).filter(t => t.id !== id));
   },
+
+  // Default Configurations: Terms & Conditions for AMC Quotation (separate list — seeds AMC Quotations only)
+  getAmcTermsTemplates() { return readList(STORAGE_KEYS.amcTermsTemplates); },
+  saveAmcTermsTemplate(t) {
+    const list = readList(STORAGE_KEYS.amcTermsTemplates);
+    if (t.id) {
+      const idx = list.findIndex(x => x.id === t.id);
+      if (idx >= 0) { list[idx] = t; }
+    } else {
+      t.id = uid();
+      list.push(t);
+    }
+    writeList(STORAGE_KEYS.amcTermsTemplates, list);
+    return t;
+  },
+  deleteAmcTermsTemplate(id) {
+    assertCanDelete();
+    writeList(STORAGE_KEYS.amcTermsTemplates, readList(STORAGE_KEYS.amcTermsTemplates).filter(t => t.id !== id));
+  },
 };
 
 /**
@@ -494,7 +535,7 @@ function collectLocalStorageSnapshot() {
   Object.values(STORAGE_KEYS).forEach((key) => {
     if (key === STORAGE_KEYS.purchaseCompanies) return;
     const raw = localStorage.getItem(key);
-    snapshot[key] = raw ? JSON.parse(raw) : ((key === STORAGE_KEYS.profile || key === STORAGE_KEYS.tabLayout) ? null : []);
+    snapshot[key] = raw ? JSON.parse(raw) : ((key === STORAGE_KEYS.profile || key === STORAGE_KEYS.tabLayout || key === STORAGE_KEYS.emailTemplates) ? null : []);
   });
   return snapshot;
 }
@@ -1054,7 +1095,7 @@ Store.fetchLatestDataFromSupabase = async function fetchLatestDataFromSupabase()
   const map = await fetchSupabaseKeysBatch(ALL_BUSINESS_DATA_KEYS);
   const snapshot = {};
   ALL_BUSINESS_DATA_KEYS.forEach((key) => {
-    snapshot[key] = map[key] !== undefined ? map[key] : ((key === STORAGE_KEYS.profile || key === STORAGE_KEYS.tabLayout) ? null : []);
+    snapshot[key] = map[key] !== undefined ? map[key] : ((key === STORAGE_KEYS.profile || key === STORAGE_KEYS.tabLayout || key === STORAGE_KEYS.emailTemplates) ? null : []);
   });
   return snapshot;
 };
@@ -1091,7 +1132,7 @@ Store.computeSyncDiff = async function computeSyncDiff() {
   ALL_BUSINESS_DATA_KEYS.forEach((key) => {
     const localVal = local[key];
     const remoteVal = remote[key];
-    if (key === STORAGE_KEYS.profile || key === STORAGE_KEYS.tabLayout) {
+    if (key === STORAGE_KEYS.profile || key === STORAGE_KEYS.tabLayout || key === STORAGE_KEYS.emailTemplates) {
       result[key] = { type: 'object', changes: diffRecordFields(remoteVal || {}, localVal || {}) };
     } else {
       const oldList = Array.isArray(remoteVal) ? remoteVal : [];

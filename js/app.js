@@ -58,7 +58,15 @@ function withErrorToast(fn) {
   };
 }
 
-function openModal(id) { $('#' + id).classList.add('open'); }
+function openModal(id) {
+  const modal = $('#' + id);
+  modal.classList.add('open');
+  setTimeout(() => {
+    const field = $$('input:not([type="hidden"]):not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly]), select:not([disabled])', modal)
+      .find(el => el.offsetParent !== null);
+    if (field) field.focus();
+  }, 0);
+}
 function closeModal(id) { $('#' + id).classList.remove('open'); }
 
 document.addEventListener('keydown', (e) => {
@@ -77,7 +85,7 @@ document.addEventListener('click', (e) => {
 });
 
 /* ---------------- Tabs (two-level: primary + Sales/Financials sub-navs) ---------------- */
-const tabGroups = { sales: ['quotations', 'invoices', 'payments', 'serviceReports'], financials: ['summary', 'pnl', 'gst'], charts: ['companySalesChart', 'productSalesChart', 'pendingPaymentsChart', 'purchaseCompanyChart', 'expenseCategoryChart'] };
+const tabGroups = { sales: ['quotations', 'invoices', 'payments', 'serviceReports', 'amcQuotations'], financials: ['summary', 'pnl', 'gst'], charts: ['companySalesChart', 'productSalesChart', 'pendingPaymentsChart', 'purchaseCompanyChart', 'expenseCategoryChart', 'reports'] };
 const lastSubTab = { sales: 'quotations', financials: 'summary', charts: 'companySalesChart' };
 
 /* Admin-configurable tab layout (Settings > Tab Layout) — which of the 6
@@ -85,7 +93,7 @@ const lastSubTab = { sales: 'quotations', financials: 'summary', charts: 'compan
    excluded: it keeps its own existing hardcoded admin-only visibility
    (see activateTab() below) and is always pinned last in the nav. */
 const PRIMARY_NAV_DEFAULT_ORDER = ['financials', 'sales', 'purchases', 'products', 'companies', 'charts'];
-const PRIMARY_NAV_LABELS = { financials: 'Financials', sales: 'Sales', purchases: 'Purchase', products: 'Products', companies: 'Company', charts: 'Charts' };
+const PRIMARY_NAV_LABELS = { financials: 'Financials', sales: 'Sales', purchases: 'Purchase', products: 'Products', companies: 'Company', charts: 'Charts/Reports' };
 
 function normalizeTabOrder(savedOrder) {
   const valid = (savedOrder || []).filter((id) => PRIMARY_NAV_DEFAULT_ORDER.includes(id));
@@ -138,6 +146,7 @@ const TAB_LAZY_KEYS = {
   products: [STORAGE_KEYS.products],
   companies: [STORAGE_KEYS.companies],
   quotations: [STORAGE_KEYS.quotations, STORAGE_KEYS.companies],
+  amcQuotations: [STORAGE_KEYS.quotations, STORAGE_KEYS.companies],
   invoices: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
   payments: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
   serviceReports: [STORAGE_KEYS.serviceReports, STORAGE_KEYS.companies],
@@ -155,6 +164,7 @@ const TAB_LAZY_KEYS = {
   productSalesChart: [STORAGE_KEYS.invoices],
   pendingPaymentsChart: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
   purchaseCompanyChart: [STORAGE_KEYS.purchases, STORAGE_KEYS.companies],
+  reports: [STORAGE_KEYS.invoices, STORAGE_KEYS.purchases, STORAGE_KEYS.companies],
   expenseCategoryChart: [STORAGE_KEYS.expenses],
 };
 
@@ -168,6 +178,7 @@ const TAB_LOADING_TARGET = {
   products: { selector: '#productsTbody', colspan: 8 },
   companies: { selector: '#companiesTbody', colspan: 6 },
   quotations: { selector: '#quotationsTbody', colspan: 4 },
+  amcQuotations: { selector: '#amcQuotationsTbody', colspan: 4 },
   invoices: { selector: '#invoicesTbody', colspan: 9 },
   serviceReports: { selector: '#serviceReportsTbody', colspan: 5 },
   purchases: { selector: '#purchasesTbody', colspan: 9 },
@@ -212,10 +223,11 @@ async function activateTab(tabId) {
   if (tabId === 'products') renderProducts();
   if (tabId === 'companies') renderCompanies();
   if (tabId === 'quotations') renderQuotations();
+  if (tabId === 'amcQuotations') renderAmcQuotations();
   if (tabId === 'invoices') renderInvoices();
   if (tabId === 'payments') renderPayments();
   if (tabId === 'serviceReports') renderServiceReports();
-  if (tabId === 'purchases') { renderPurchases(); renderPurchasesByCompany(); renderExpenses(); }
+  if (tabId === 'purchases') { renderPurchases(); renderExpenses(); }
   if (tabId === 'summary') renderSummary();
   if (tabId === 'pnl') renderProfitLoss();
   if (tabId === 'gst') renderGstPayment();
@@ -224,6 +236,7 @@ async function activateTab(tabId) {
   if (tabId === 'pendingPaymentsChart') renderPendingPaymentsChart();
   if (tabId === 'purchaseCompanyChart') renderPurchaseCompanyChart();
   if (tabId === 'expenseCategoryChart') renderExpenseCategoryChart();
+  if (tabId === 'reports') { renderSalesByCompany(); renderPurchasesByCompany(); }
   if (tabId === 'errorLogs') renderErrorLogs();
 }
 
@@ -336,6 +349,49 @@ function resolveDocProfile(doc) {
   return doc.profileSnapshot ? Object.assign({}, live, doc.profileSnapshot) : live;
 }
 
+/* Shared "Send Email" action for Invoice/Quotation/Service Report Download-PDF
+   siblings. `kind` matches the existing kind vocabulary ('invoice'|'quotation'|
+   'serviceReport'); `doc` is the already-built jsPDF instance (identical to what
+   the sibling Download PDF button would call .save() on); `filename` is the
+   exact string that sibling already passes to doc.save(filename). Feature-detects
+   file-capable Web Share (never UA-sniffed) and, when available, hands the PDF as
+   a real File to the OS share sheet with the fixed Subject/Body as title/text.
+   Otherwise falls back to the existing download + a mailto compose window with
+   the recipient left blank. A cancelled share (AbortError) is a normal outcome,
+   not a failure. */
+function sendDocumentEmail(kind, filename, doc) {
+  const templates = Store.getEmailTemplates();
+  if (!templates.enabled) return; // backstop — buttons are hidden when disabled, this just guards a stray call
+  const tpl = templates[kind] || { subject: '', body: '' };
+  const subject = tpl.subject || '';
+  const body = tpl.body || '';
+
+  function fallbackDownloadAndMailto() {
+    doc.save(filename);
+    const a = document.createElement('a');
+    a.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  let file;
+  try {
+    file = new File([doc.output('blob')], filename, { type: 'application/pdf' });
+  } catch (e) {
+    fallbackDownloadAndMailto();
+    return;
+  }
+
+  if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
+    return navigator.share({ files: [file], title: subject, text: body }).catch((e) => {
+      if (e && e.name === 'AbortError') return; // user cancelled the share sheet — not a failure
+      fallbackDownloadAndMailto();
+    });
+  }
+  fallbackDownloadAndMailto();
+}
+
 /* Narrows the window for two users generating the same auto-numbered document at
    nearly the same time: re-fetches the freshest copy of the relevant records right
    before a brand-new document is actually saved (a no-op on the local-file backend,
@@ -378,6 +434,15 @@ function ensureEditingRecordExists(kind, existingId, list) {
 const sortState = {};
 const SORT_RENDER_FNS = {};
 
+/* Default sort (before any user click) for the 4 document-number lists —
+   newest number first, rather than the createdAt-desc fallback every other
+   table without a sortState entry uses. */
+sortState.quotations = { key: 'quotationNo', dir: 'desc', type: 'text' };
+sortState.amcQuotations = { key: 'quotationNo', dir: 'desc', type: 'text' };
+sortState.invoices = { key: 'invoiceNo', dir: 'desc', type: 'text' };
+sortState.purchases = { key: 'purchaseNo', dir: 'desc', type: 'text' };
+sortState.serviceReports = { key: 'reportNo', dir: 'desc', type: 'text' };
+
 function sortRows(rows, tableKey) {
   const st = sortState[tableKey];
   if (!st) return rows;
@@ -418,6 +483,77 @@ document.addEventListener('click', (e) => {
   const current = sortState[tableKey];
   const dir = (current && current.key === key && current.dir === 'asc') ? 'desc' : 'asc';
   sortState[tableKey] = { key, dir, type };
+  const st = paginationState[tableKey];
+  if (st) { if (st.pages) st.pages = {}; else st.page = 1; }
+  const renderFn = SORT_RENDER_FNS[tableKey];
+  if (renderFn) renderFn();
+});
+
+/* =====================================================================
+   Generic pagination (click a table's Prev/Next or change its page-size
+   dropdown). Mirrors the sort mechanism above: one shared paginationState
+   object + a paginate helper + a bar-renderer, reusing SORT_RENDER_FNS to
+   know which render function to re-invoke after a page/page-size change —
+   every table with pagination already has a sort registry entry there.
+   Flat tables:      paginationState[tableKey] = { page, pageSize }
+   Accordion tables:  paginationState[tableKey] = { pageSize, pages: { [companyId]: page } }
+===================================================================== */
+const DEFAULT_PAGE_SIZE = 10;
+const paginationState = {};
+
+function paginateRows(rows, tableKey, subKey) {
+  let st = paginationState[tableKey];
+  if (!st) st = paginationState[tableKey] = (subKey !== undefined) ? { pageSize: DEFAULT_PAGE_SIZE, pages: {} } : { page: 1, pageSize: DEFAULT_PAGE_SIZE };
+  const pageSize = st.pageSize;
+  const rawPage = (subKey !== undefined) ? (st.pages[subKey] || 1) : st.page;
+  const totalCount = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const page = Math.min(Math.max(1, rawPage), totalPages);
+  if (subKey !== undefined) st.pages[subKey] = page; else st.page = page;
+  const start = (page - 1) * pageSize;
+  return { pageRows: rows.slice(start, start + pageSize), page, totalPages, totalCount, pageSize, start };
+}
+
+function renderPaginationBar(tableKey, meta, subKey) {
+  if (meta.totalCount === 0) return '';
+  const end = Math.min(meta.start + meta.pageSize, meta.totalCount);
+  const subAttr = subKey !== undefined ? ` data-page-sub="${escapeHtml(subKey)}"` : '';
+  return `
+    <div class="table-pagination">
+      <span class="pagination-info">Showing ${meta.start + 1}–${end} of ${meta.totalCount}</span>
+      <div class="pagination-controls">
+        <select class="pagination-size" data-page-size-table="${tableKey}"${subAttr}>
+          ${[10, 20, 50, 100].map(n => `<option value="${n}" ${n === meta.pageSize ? 'selected' : ''}>${n} / page</option>`).join('')}
+        </select>
+        <button type="button" class="btn-icon" data-page-prev="${tableKey}"${subAttr} ${meta.page <= 1 ? 'disabled' : ''}>&#8249;</button>
+        <span class="pagination-page">Page ${meta.page} of ${meta.totalPages}</span>
+        <button type="button" class="btn-icon" data-page-next="${tableKey}"${subAttr} ${meta.page >= meta.totalPages ? 'disabled' : ''}>&#8250;</button>
+      </div>
+    </div>`;
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest && e.target.closest('[data-page-prev], [data-page-next]');
+  if (!btn) return;
+  const isPrev = btn.hasAttribute('data-page-prev');
+  const tableKey = btn.getAttribute(isPrev ? 'data-page-prev' : 'data-page-next');
+  const subKey = btn.getAttribute('data-page-sub');
+  const st = paginationState[tableKey];
+  if (!st) return;
+  if (subKey !== null) st.pages[subKey] = (st.pages[subKey] || 1) + (isPrev ? -1 : 1);
+  else st.page = (st.page || 1) + (isPrev ? -1 : 1);
+  const renderFn = SORT_RENDER_FNS[tableKey];
+  if (renderFn) renderFn();
+});
+
+document.addEventListener('change', (e) => {
+  const sel = e.target.closest && e.target.closest('[data-page-size-table]');
+  if (!sel) return;
+  const tableKey = sel.getAttribute('data-page-size-table');
+  const subKey = sel.getAttribute('data-page-sub');
+  const st = paginationState[tableKey] || (paginationState[tableKey] = subKey !== null ? { pageSize: DEFAULT_PAGE_SIZE, pages: {} } : { page: 1, pageSize: DEFAULT_PAGE_SIZE });
+  st.pageSize = Number(sel.value) || DEFAULT_PAGE_SIZE;
+  if (subKey !== null) st.pages[subKey] = 1; else st.page = 1;
   const renderFn = SORT_RENDER_FNS[tableKey];
   if (renderFn) renderFn();
 });
@@ -464,10 +600,13 @@ function renderProducts() {
   const products = sortRows(applyProductsFilter(all), 'products');
   if (!all.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="8">No products yet. Click "Add Product" to create one.</td></tr>`;
+    $('#productsPagination').innerHTML = '';
   } else if (!products.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="8">No products match your filters.</td></tr>`;
+    $('#productsPagination').innerHTML = '';
   } else {
-    tbody.innerHTML = products.map(p => `
+    const pageMeta = paginateRows(products, 'products');
+    tbody.innerHTML = pageMeta.pageRows.map(p => `
       <tr>
         <td>${escapeHtml(p.name)}</td>
         <td>${escapeHtml(p.hsnCode)}</td>
@@ -482,24 +621,51 @@ function renderProducts() {
         </div></td>
       </tr>
     `).join('');
+    $('#productsPagination').innerHTML = renderPaginationBar('products', pageMeta);
   }
   updateSortIndicators('products');
 }
 
-$('#productsFilterSearch').addEventListener('input', (e) => { filterState.products.search = e.target.value; renderProducts(); });
-$('#productsFilterUnit').addEventListener('change', (e) => { filterState.products.unit = e.target.value; renderProducts(); });
-$('#productsFilterGst').addEventListener('change', (e) => { filterState.products.gst = e.target.value; renderProducts(); });
+$('#productsFilterSearch').addEventListener('input', (e) => { filterState.products.search = e.target.value; if (paginationState.products) paginationState.products.page = 1; renderProducts(); });
+$('#productsFilterUnit').addEventListener('change', (e) => { filterState.products.unit = e.target.value; if (paginationState.products) paginationState.products.page = 1; renderProducts(); });
+$('#productsFilterGst').addEventListener('change', (e) => { filterState.products.gst = e.target.value; if (paginationState.products) paginationState.products.page = 1; renderProducts(); });
 $('#productsFilterClear').addEventListener('click', () => {
   filterState.products = { search: '', unit: '', gst: '' };
   $('#productsFilterSearch').value = '';
   $('#productsFilterUnit').value = '';
   $('#productsFilterGst').value = '';
+  if (paginationState.products) paginationState.products.page = 1;
   renderProducts();
 });
 
 function escapeHtml(s) {
   if (s === undefined || s === null) return '';
   return String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+}
+
+/* Mirrors pdf.js's wrapAddressLines() for on-screen HTML: splits on real
+   newlines into paragraphs (joined with <br> so line breaks the user actually
+   typed are respected, instead of being silently collapsed by normal HTML
+   whitespace handling), and within a paragraph, wraps each " | "-separated
+   piece in a non-breaking span (.addr-chunk) so the browser's own line-wrap
+   can only break BETWEEN pieces, never inside one — a label like "E-mail:"
+   can never end up separated from its own value. A paragraph with no "|" is
+   just escaped as plain text, unaffected. */
+function formatAddressHtml(text) {
+  return String(text || '').split(/\r?\n/).map((para) => {
+    const chunks = para.split(/\s*\|\s*/).filter(Boolean);
+    if (chunks.length <= 1) return escapeHtml(para);
+    return chunks.map(c => `<span class="addr-chunk">${escapeHtml(c)}</span>`).join(' | ');
+  }).join('<br>');
+}
+
+/* Validates a profile.nameColor value before it's injected into an inline
+   style attribute — only a strict "#rrggbb" (exactly what <input type="color">
+   itself always produces) passes through; anything else (blank, or a legacy
+   profile saved before this field existed) falls back to black, matching the
+   app's original hardcoded business-name color. */
+function sanitizeHexColor(hex) {
+  return /^#[0-9a-fA-F]{6}$/.test(hex || '') ? hex : '#000000';
 }
 
 function openProductModal(product) {
@@ -585,10 +751,13 @@ function renderCompanies() {
   const companies = sortRows(applyCompaniesFilter(all), 'companies');
   if (!all.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No companies yet. Click "Add Company" to create one.</td></tr>`;
+    $('#companiesPagination').innerHTML = '';
   } else if (!companies.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No companies match your filters.</td></tr>`;
+    $('#companiesPagination').innerHTML = '';
   } else {
-    tbody.innerHTML = companies.map(c => `
+    const pageMeta = paginateRows(companies, 'companies');
+    tbody.innerHTML = pageMeta.pageRows.map(c => `
       <tr>
         <td>${escapeHtml(c.name)}</td>
         <td>${escapeHtml(c.address || '')}</td>
@@ -601,16 +770,18 @@ function renderCompanies() {
         </div></td>
       </tr>
     `).join('');
+    $('#companiesPagination').innerHTML = renderPaginationBar('companies', pageMeta);
   }
   updateSortIndicators('companies');
 }
 
-$('#companiesFilterSearch').addEventListener('input', (e) => { filterState.companies.search = e.target.value; renderCompanies(); });
-$('#companiesFilterType').addEventListener('change', (e) => { filterState.companies.type = e.target.value; renderCompanies(); });
+$('#companiesFilterSearch').addEventListener('input', (e) => { filterState.companies.search = e.target.value; if (paginationState.companies) paginationState.companies.page = 1; renderCompanies(); });
+$('#companiesFilterType').addEventListener('change', (e) => { filterState.companies.type = e.target.value; if (paginationState.companies) paginationState.companies.page = 1; renderCompanies(); });
 $('#companiesFilterClear').addEventListener('click', () => {
   filterState.companies = { search: '', type: '' };
   $('#companiesFilterSearch').value = '';
   $('#companiesFilterType').value = '';
+  if (paginationState.companies) paginationState.companies.page = 1;
   renderCompanies();
 });
 
@@ -672,6 +843,7 @@ function loadProfileForm() {
   $('#profGstin').value = p.gstin || '';
   $('#profAddress').value = p.address || '';
   $('#profFooterText').value = p.footerText || '';
+  $('#profNameColor').value = p.nameColor || '#000000';
   $('#profLogoWidthPx').value = p.logoWidthPx || '';
   $('#profLogoHeightPx').value = p.logoHeightPx || '';
   $('#profBankName').value = p.bankName || '';
@@ -735,6 +907,7 @@ $('#profileForm').addEventListener('submit', withErrorToast((e) => {
     gstin: $('#profGstin').value.trim().toUpperCase(),
     address: $('#profAddress').value.trim(),
     footerText: $('#profFooterText').value.trim(),
+    nameColor: $('#profNameColor').value,
     logoWidthPx: Number($('#profLogoWidthPx').value) || null,
     logoHeightPx: Number($('#profLogoHeightPx').value) || null,
     bankName: $('#profBankName').value.trim(),
@@ -777,6 +950,8 @@ $('#settingsDropdown').addEventListener('click', (e) => {
     openDbConnectionModal();
   } else if (action === 'tabLayout') {
     openTabLayoutModal();
+  } else if (action === 'emailTemplates') {
+    openEmailTemplatesModal();
   }
 });
 
@@ -842,6 +1017,54 @@ $('#saveTabLayoutBtn').addEventListener('click', withErrorToast(() => {
   applyTabLayout();
   closeModal('tabLayoutModal');
   toast('Tab layout saved');
+}));
+
+/* =====================================================================
+   EMAIL TEMPLATES (Settings > Email Templates, admin-only)
+===================================================================== */
+function loadEmailTemplatesForm() {
+  const t = Store.getEmailTemplates();
+  $('#emailTplEnabled').checked = !!t.enabled;
+  $('#emailTplBusinessEmail').value = t.businessEmail || '';
+  $('#emailTplInvoiceSubject').value = (t.invoice && t.invoice.subject) || '';
+  $('#emailTplInvoiceBody').value = (t.invoice && t.invoice.body) || '';
+  $('#emailTplQuotationSubject').value = (t.quotation && t.quotation.subject) || '';
+  $('#emailTplQuotationBody').value = (t.quotation && t.quotation.body) || '';
+  $('#emailTplServiceReportSubject').value = (t.serviceReport && t.serviceReport.subject) || '';
+  $('#emailTplServiceReportBody').value = (t.serviceReport && t.serviceReport.body) || '';
+  $$('#emailTemplatesModal .accordion-header').forEach((header) => {
+    header.classList.remove('expanded');
+    header.nextElementSibling.style.display = 'none';
+  });
+}
+
+$$('#emailTemplatesModal .accordion-header').forEach((header) => {
+  header.addEventListener('click', () => {
+    const expanded = header.classList.toggle('expanded');
+    header.nextElementSibling.style.display = expanded ? '' : 'none';
+  });
+});
+
+function openEmailTemplatesModal() {
+  loadEmailTemplatesForm();
+  openModal('emailTemplatesModal');
+}
+
+$('#emailTemplatesForm').addEventListener('submit', withErrorToast((e) => {
+  e.preventDefault();
+  if (blockIfViewer()) return;
+  Store.saveEmailTemplates({
+    enabled: $('#emailTplEnabled').checked,
+    businessEmail: $('#emailTplBusinessEmail').value.trim(),
+    invoice: { subject: $('#emailTplInvoiceSubject').value.trim(), body: $('#emailTplInvoiceBody').value },
+    quotation: { subject: $('#emailTplQuotationSubject').value.trim(), body: $('#emailTplQuotationBody').value },
+    serviceReport: { subject: $('#emailTplServiceReportSubject').value.trim(), body: $('#emailTplServiceReportBody').value },
+  });
+  closeModal('emailTemplatesModal');
+  toast('Email templates saved');
+  renderQuotations();
+  renderInvoices();
+  renderServiceReports();
 }));
 
 function openDataFileModal() {
@@ -1108,6 +1331,7 @@ function populateCompanyDropdowns(preserveIds) {
     selectEl.innerHTML = `<option value="">${placeholder}</option>` + opts.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
   }
   buildSelect($('#quotationCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.quotation);
+  buildSelect($('#amcQuotationCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.amcQuotation);
   buildSelect($('#invoiceCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.invoice);
   buildSelect($('#purchaseCompany'), c => c.isPurchaseCompany, '-- Select Purchase Company --', preserveIds.purchase);
   buildSelect($('#serviceReportCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.serviceReport);
@@ -1122,7 +1346,7 @@ function populateProductPicker(selectEl) {
 /* =====================================================================
    Quotation / Invoice shared line-item + totals engine
 ===================================================================== */
-const draft = { quotation: { items: [] }, invoice: { items: [] }, purchase: { items: [] }, serviceReport: { tables: [], notes: [] } };
+const draft = { quotation: { items: [] }, invoice: { items: [] }, purchase: { items: [] }, serviceReport: { tables: [], notes: [] }, amcQuotation: { items: [], consumables: [], terms: [] } };
 
 function companiesStoreForKind(kind) {
   const companies = Store.getCompanies();
@@ -1249,14 +1473,16 @@ function renderTotalsBox(kind) {
 ===================================================================== */
 function renderQuotations() {
   const tbody = $('#quotationsTbody');
-  let quotations = Store.getQuotations().map(q => Object.assign({}, q, { _companyName: companyName(q.companyId) }));
+  let quotations = Store.getQuotations().filter(q => !q.isAMC).map(q => Object.assign({}, q, { _companyName: companyName(q.companyId) }));
   quotations = sortState.quotations ? sortRows(quotations, 'quotations') : quotations.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   if (!quotations.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="4">No quotations yet.</td></tr>`;
+    $('#quotationsPagination').innerHTML = '';
     updateSortIndicators('quotations');
     return;
   }
-  tbody.innerHTML = quotations.map(q => `
+  const pageMeta = paginateRows(quotations, 'quotations');
+  tbody.innerHTML = pageMeta.pageRows.map(q => `
     <tr>
       <td>${escapeHtml(q.quotationNo)}</td>
       <td>${fmtDateShort(q.date)}</td>
@@ -1264,10 +1490,12 @@ function renderQuotations() {
       <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-quotation="${q.id}">Edit</button>
         <button class="btn btn-secondary btn-sm" data-pdf-quotation="${q.id}">Download PDF</button>
+        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-quotation="${q.id}">Send Email</button>` : ''}
         <button class="btn btn-danger btn-sm" data-delete-quotation="${q.id}">Delete</button>
       </div></td>
     </tr>
   `).join('');
+  $('#quotationsPagination').innerHTML = renderPaginationBar('quotations', pageMeta);
   updateSortIndicators('quotations');
 }
 
@@ -1359,6 +1587,7 @@ function showQuotationStep(step) {
   $('#quotationNextBtn').style.display = isForm ? '' : 'none';
   $('#quotationEditBtn').style.display = isForm ? 'none' : '';
   $('#quotationDownloadBtn').style.display = isForm ? 'none' : '';
+  $('#quotationSendEmailBtn').style.display = (isForm || !Store.getEmailTemplates().enabled) ? 'none' : '';
   $('#quotationConfirmBtn').style.display = isForm ? 'none' : '';
 }
 
@@ -1494,8 +1723,8 @@ function renderDocPreview(container, docData, company, docTitle, isInvoice) {
       <div class="doc-head-left">
         ${profile.logoDataUrl ? `<img class="doc-logo" src="${profile.logoDataUrl}">` : ''}
         <div>
-          <div class="biz-title">${escapeHtml(profile.name || 'Your Business Name')}</div>
-          <div>${escapeHtml(profile.address || '')}</div>
+          <div class="biz-title" style="color: ${sanitizeHexColor(profile.nameColor)};">${escapeHtml(profile.name || 'Your Business Name')}</div>
+          <div>${formatAddressHtml(profile.address || '')}</div>
           ${profile.gstin ? `<div>GSTIN: ${escapeHtml(profile.gstin)}</div>` : ''}
         </div>
       </div>
@@ -1531,7 +1760,7 @@ function renderDocPreview(container, docData, company, docTitle, isInvoice) {
       </div>` : ''}
     ${isInvoice ? `<div class="amount-words">Amount in Words: ${amountInWords(docData.total)}</div>` : ''}
     ${bankHtml}
-    <div class="doc-address-footer">${escapeHtml(profile.name || '')} — ${escapeHtml(profile.address || '')}</div>
+    <div class="doc-address-footer">${formatAddressHtml((profile.footerText && profile.footerText.trim()) ? profile.footerText.trim() : [profile.name, profile.address].filter(Boolean).join(' | '))}</div>
   `;
 }
 
@@ -1563,6 +1792,12 @@ $('#quotationDownloadBtn').addEventListener('click', () => {
   const doc = buildQuotationPdf(docData, company, Store.getProfile());
   doc.save(`${docData.quotationNo.replace(/\//g, '-')}.pdf`);
 });
+
+$('#quotationSendEmailBtn').addEventListener('click', withErrorToast(() => {
+  const [docData, company] = getQuotationDraftDoc();
+  const doc = buildQuotationPdf(docData, company, Store.getProfile());
+  return sendDocumentEmail('quotation', `${docData.quotationNo.replace(/\//g, '-')}.pdf`, doc);
+}));
 
 $('#quotationConfirmBtn').addEventListener('click', withErrorToast(async () => {
   if (blockIfViewer()) return;
@@ -1608,11 +1843,490 @@ document.addEventListener('click', withErrorToast((e) => {
     const doc = buildQuotationPdf(q, resolveBillToCompany(q), resolveDocProfile(q));
     doc.save(`${q.quotationNo.replace(/\//g, '-')}.pdf`);
   }
+  const emailId = e.target.getAttribute && e.target.getAttribute('data-email-quotation');
+  if (emailId) {
+    const q = Store.getQuotations().find(x => x.id === emailId);
+    const doc = buildQuotationPdf(q, resolveBillToCompany(q), resolveDocProfile(q));
+    return sendDocumentEmail('quotation', `${q.quotationNo.replace(/\//g, '-')}.pdf`, doc);
+  }
   const delId = e.target.getAttribute && e.target.getAttribute('data-delete-quotation');
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
     if (confirm('Delete this quotation?')) { Store.deleteQuotation(delId); renderQuotations(); toast('Quotation deleted'); }
+  }
+}));
+
+/* =====================================================================
+   AMC QUOTATIONS
+   A specialized quotation variant for Annual Maintenance Contracts.
+   Stored in the SAME `quotations` array via the SAME Store.saveQuotation /
+   getQuotations / deleteQuotation, tagged with isAMC: true — this is what
+   makes it share the exact same QTN- numbering sequence as regular
+   Quotations (getNextQuotationNo() needs no changes at all) while still
+   being filterable into its own list/tab (renderQuotations() excludes
+   isAMC records; renderAmcQuotations() below shows only them).
+
+   Deliberately NOT built by extending renderLineItems/renderDocPreview/
+   buildQuotationPdf with a third branch — this is a fully separate,
+   dedicated implementation so the already-shipped Quotation feature is
+   never touched. Only low-level generic helpers are reused: computeTotals,
+   drawHeader/drawTotalsBlock/drawFooter (pdf.js), populateProductPicker,
+   companiesStoreForKind, currentInterState, resolveBillToCompany/
+   resolveDocProfile, pagination/sort, guardAgainstNumberCollision,
+   getNextQuotationNo.
+
+   Main items carry no qty/unit/requiredQty — an AMC line is a flat
+   per-line Rate, not a quantity-based sale — so `amount` is kept equal to
+   `rate` at all times (addAmcLineItemToDraft / the rate-field input
+   listener below) purely so the unmodified, generic computeTotals(items,
+   interState) — which sums item.amount when present, else qty*rate —
+   keeps working with zero changes to gst.js.
+
+   Consumables are a second, independent item list that is purely a
+   reference price list: it never feeds Subtotal/Tax/Grand Total, and
+   prints on its own forced-page-break PDF page as the last content
+   section of the document (see buildAmcQuotationPdf in pdf.js).
+===================================================================== */
+function renderAmcQuotations() {
+  const tbody = $('#amcQuotationsTbody');
+  let quotations = Store.getQuotations().filter(q => q.isAMC).map(q => Object.assign({}, q, { _companyName: companyName(q.companyId) }));
+  quotations = sortState.amcQuotations ? sortRows(quotations, 'amcQuotations') : quotations.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  if (!quotations.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">No AMC quotations yet.</td></tr>`;
+    $('#amcQuotationsPagination').innerHTML = '';
+    updateSortIndicators('amcQuotations');
+    return;
+  }
+  const pageMeta = paginateRows(quotations, 'amcQuotations');
+  tbody.innerHTML = pageMeta.pageRows.map(q => `
+    <tr>
+      <td>${escapeHtml(q.quotationNo)}</td>
+      <td>${fmtDateShort(q.date)}</td>
+      <td>${escapeHtml(q._companyName)}</td>
+      <td><div class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-amcQuotation="${q.id}">Edit</button>
+        <button class="btn btn-secondary btn-sm" data-pdf-amcQuotation="${q.id}">Download PDF</button>
+        <button class="btn btn-danger btn-sm" data-delete-amcQuotation="${q.id}">Delete</button>
+      </div></td>
+    </tr>
+  `).join('');
+  $('#amcQuotationsPagination').innerHTML = renderPaginationBar('amcQuotations', pageMeta);
+  updateSortIndicators('amcQuotations');
+}
+
+function resetAmcQuotationModal() {
+  draft.amcQuotation = { items: [], consumables: [], terms: Store.getAmcTermsTemplates().map(t => t.text) };
+  $('#amcQuotationId').value = '';
+  $('#amcQuotationDate').value = todayISO();
+  populateCompanyDropdowns();
+  $('#amcQuotationCompany').value = '';
+  $('#amcQuotationHeading').value = '';
+  $('#amcQuotationConsumableHeading').value = 'Consumable Rates';
+  $('#amcQuotationShowSubtotal').checked = false;
+  $('#amcQuotationShowTax').checked = false;
+  $('#amcQuotationShowGrandTotal').checked = false;
+  populateProductPicker($('#amcQuotationProductPicker'));
+  populateProductPicker($('#amcQuotationConsumableProductPicker'));
+  renderAmcLineItems();
+  renderAmcConsumables();
+  renderAmcQuotationTerms();
+  showAmcQuotationStep('form');
+}
+
+function addAmcLineItemToDraft(productId) {
+  const product = Store.getProducts().find(p => p.id === productId);
+  if (!product) return;
+  const rate = product.rate;
+  draft.amcQuotation.items.push({
+    productId: product.id,
+    name: product.name,
+    rate,
+    amount: rate,
+    gstPercent: product.gstPercent,
+    details: product.details || '',
+  });
+  renderAmcLineItems();
+}
+
+function addAmcConsumableToDraft(productId) {
+  const product = Store.getProducts().find(p => p.id === productId);
+  if (!product) return;
+  draft.amcQuotation.consumables.push({
+    productId: product.id,
+    name: product.name,
+    qty: 1,
+    rate: product.rate,
+    details: product.details || '',
+  });
+  renderAmcConsumables();
+}
+
+function renderAmcLineItems() {
+  const tbody = $('#amcQuotationLineItemsBody');
+  const items = draft.amcQuotation.items;
+  if (!items.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">No line items added yet.</td></tr>`;
+  } else {
+    tbody.innerHTML = items.map((it, idx) => `
+      <tr>
+        <td>${escapeHtml(it.name)}</td>
+        <td class="num-col"><input type="number" min="0" step="0.01" value="${it.rate}" data-amc-line-field="rate" data-amc-line-idx="${idx}"></td>
+        <td><button type="button" class="remove-line" data-amc-remove-line="${idx}">&times;</button></td>
+      </tr>
+      <tr class="line-details-row">
+        <td colspan="3"><textarea placeholder="Additional details for this line (optional)" data-amc-line-field="details" data-amc-line-idx="${idx}">${escapeHtml(it.details || '')}</textarea></td>
+      </tr>`).join('');
+  }
+  renderAmcTotalsBox();
+}
+
+document.addEventListener('input', (e) => {
+  const field = e.target.getAttribute('data-amc-line-field');
+  if (!field) return;
+  const idx = Number(e.target.getAttribute('data-amc-line-idx'));
+  const it = draft.amcQuotation.items[idx];
+  if (field === 'details') {
+    it.details = e.target.value;
+    return;
+  }
+  if (field === 'rate') {
+    it.rate = Number(e.target.value) || 0;
+    it.amount = it.rate;
+    renderAmcTotalsBox();
+  }
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.hasAttribute('data-amc-remove-line')) return;
+  const idx = Number(e.target.getAttribute('data-amc-remove-line'));
+  draft.amcQuotation.items.splice(idx, 1);
+  renderAmcLineItems();
+});
+
+function renderAmcTotalsBox() {
+  const interState = currentInterState('amcQuotation');
+  const totals = computeTotals(draft.amcQuotation.items, interState);
+  draft.amcQuotation.totals = totals;
+  const box = $('#amcQuotationTotalsBox');
+  const rows = [];
+  rows.push(`<div class="row"><span>Subtotal</span><span>${fmt(totals.subtotal)}</span></div>`);
+  if (interState) {
+    rows.push(`<div class="row"><span>IGST</span><span>${fmt(totals.igst)}</span></div>`);
+  } else {
+    rows.push(`<div class="row"><span>CGST</span><span>${fmt(totals.cgst)}</span></div>`);
+    rows.push(`<div class="row"><span>SGST</span><span>${fmt(totals.sgst)}</span></div>`);
+  }
+  rows.push(`<div class="row grand"><span>Grand Total</span><span>${fmt(totals.total)}</span></div>`);
+  box.innerHTML = rows.join('');
+}
+
+$('#amcQuotationCompany').addEventListener('change', () => renderAmcTotalsBox());
+
+function renderAmcConsumables() {
+  const tbody = $('#amcQuotationConsumablesBody');
+  const items = draft.amcQuotation.consumables;
+  if (!items.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">No consumables added yet.</td></tr>`;
+  } else {
+    tbody.innerHTML = items.map((it, idx) => `
+      <tr>
+        <td>${escapeHtml(it.name)}</td>
+        <td class="num-col"><input type="number" min="0" step="any" value="${it.qty}" data-amc-consumable-field="qty" data-amc-consumable-idx="${idx}"></td>
+        <td class="num-col"><input type="number" min="0" step="0.01" value="${it.rate}" data-amc-consumable-field="rate" data-amc-consumable-idx="${idx}"></td>
+        <td><button type="button" class="remove-line" data-amc-remove-consumable="${idx}">&times;</button></td>
+      </tr>
+      <tr class="line-details-row">
+        <td colspan="4"><textarea placeholder="Additional details for this line (optional)" data-amc-consumable-field="details" data-amc-consumable-idx="${idx}">${escapeHtml(it.details || '')}</textarea></td>
+      </tr>`).join('');
+  }
+}
+
+document.addEventListener('input', (e) => {
+  const field = e.target.getAttribute('data-amc-consumable-field');
+  if (!field) return;
+  const idx = Number(e.target.getAttribute('data-amc-consumable-idx'));
+  const it = draft.amcQuotation.consumables[idx];
+  if (field === 'details') { it.details = e.target.value; return; }
+  it[field] = Number(e.target.value) || 0;
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.hasAttribute('data-amc-remove-consumable')) return;
+  const idx = Number(e.target.getAttribute('data-amc-remove-consumable'));
+  draft.amcQuotation.consumables.splice(idx, 1);
+  renderAmcConsumables();
+});
+
+function renderAmcQuotationTerms() {
+  const tbody = $('#amcQuotationTermsBody');
+  const terms = draft.amcQuotation.terms || [];
+  if (!terms.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">No terms added.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = terms.map((t, idx) => `
+    <tr>
+      <td>${idx + 1}</td>
+      <td><textarea data-amc-term-field data-amc-term-idx="${idx}">${escapeHtml(t)}</textarea></td>
+      <td><button type="button" class="remove-line" data-amc-remove-term="${idx}">&times;</button></td>
+    </tr>
+  `).join('');
+}
+
+document.addEventListener('input', (e) => {
+  if (!e.target.hasAttribute('data-amc-term-field')) return;
+  const idx = Number(e.target.getAttribute('data-amc-term-idx'));
+  draft.amcQuotation.terms[idx] = e.target.value;
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.hasAttribute('data-amc-remove-term')) return;
+  const idx = Number(e.target.getAttribute('data-amc-remove-term'));
+  draft.amcQuotation.terms.splice(idx, 1);
+  renderAmcQuotationTerms();
+});
+
+$('#amcQuotationAddTermBtn').addEventListener('click', () => {
+  draft.amcQuotation.terms = draft.amcQuotation.terms || [];
+  draft.amcQuotation.terms.push('');
+  renderAmcQuotationTerms();
+  const textareas = $$('#amcQuotationTermsBody textarea');
+  if (textareas.length) textareas[textareas.length - 1].focus();
+});
+
+function getAmcQuotationDisplayOptions() {
+  return {
+    showSubtotal: $('#amcQuotationShowSubtotal').checked,
+    showTax: $('#amcQuotationShowTax').checked,
+    showGrandTotal: $('#amcQuotationShowGrandTotal').checked,
+  };
+}
+
+function getAmcQuotationNoForDraft() {
+  const existingId = $('#amcQuotationId').value;
+  if (existingId) {
+    return Store.getQuotations().find(q => q.id === existingId).quotationNo;
+  }
+  return getNextQuotationNo();
+}
+
+function showAmcQuotationStep(step) {
+  const isForm = step === 'form';
+  $('#amcQuotationStepForm').style.display = isForm ? '' : 'none';
+  $('#amcQuotationStepPreview').style.display = isForm ? 'none' : '';
+  $('#amcQuotationStepLabel1').classList.toggle('active', isForm);
+  $('#amcQuotationStepLabel2').classList.toggle('active', !isForm);
+  $('#amcQuotationNextBtn').style.display = isForm ? '' : 'none';
+  $('#amcQuotationEditBtn').style.display = isForm ? 'none' : '';
+  $('#amcQuotationDownloadBtn').style.display = isForm ? 'none' : '';
+  $('#amcQuotationConfirmBtn').style.display = isForm ? 'none' : '';
+}
+
+$('#btnAddAmcQuotation').addEventListener('click', () => {
+  if (!Store.getCompanies().some(c => c.isSalesCompany) || !Store.getProducts().length) {
+    toast('Add at least one product and company first');
+    return;
+  }
+  resetAmcQuotationModal();
+  openModal('amcQuotationModal');
+});
+
+$('#amcQuotationAddLineBtn').addEventListener('click', () => {
+  const productId = $('#amcQuotationProductPicker').value;
+  if (!productId) { toast('Select a product first'); return; }
+  addAmcLineItemToDraft(productId);
+});
+
+$('#amcQuotationConsumableAddLineBtn').addEventListener('click', () => {
+  const productId = $('#amcQuotationConsumableProductPicker').value;
+  if (!productId) { toast('Select a product first'); return; }
+  addAmcConsumableToDraft(productId);
+});
+
+function buildAmcQuotationDraftDoc(extra) {
+  const companyId = $('#amcQuotationCompany').value;
+  const company = companiesStoreForKind('amcQuotation').find(c => c.id === companyId);
+  const totals = draft.amcQuotation.totals || computeTotals(draft.amcQuotation.items, currentInterState('amcQuotation'));
+  const profile = Store.getProfile();
+  const billToSnapshot = company ? { name: company.name, address: company.address || '', gstin: company.gstin || '' } : null;
+  const profileSnapshot = {
+    name: profile.name || '', address: profile.address || '', gstin: profile.gstin || '',
+    bankName: profile.bankName || '', bankAccountNo: profile.bankAccountNo || '',
+    bankIFSC: profile.bankIFSC || '', bankBranch: profile.bankBranch || '',
+  };
+  const docData = Object.assign({
+    id: $('#amcQuotationId').value || undefined,
+    isAMC: true,
+    companyId,
+    date: $('#amcQuotationDate').value,
+    heading: $('#amcQuotationHeading').value,
+    items: draft.amcQuotation.items,
+    consumableHeading: $('#amcQuotationConsumableHeading').value,
+    consumables: draft.amcQuotation.consumables,
+    subtotal: totals.subtotal,
+    cgst: totals.cgst,
+    sgst: totals.sgst,
+    igst: totals.igst,
+    total: totals.total,
+    billToSnapshot,
+    profileSnapshot,
+  }, extra || {});
+  return [docData, company];
+}
+
+function getAmcQuotationDraftDoc() {
+  return buildAmcQuotationDraftDoc({
+    quotationNo: getAmcQuotationNoForDraft(),
+    displayOptions: getAmcQuotationDisplayOptions(),
+    terms: draft.amcQuotation.terms || [],
+  });
+}
+
+function renderAmcQuotationPreview(container, docData, company) {
+  const profile = Store.getProfile();
+  const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true }, docData.displayOptions || {});
+  const interState = isInterState(profile.gstin, company ? company.gstin : '');
+
+  const rowsHtml = docData.items.map((it, idx) => {
+    const detailsHtml = it.details ? `<div class="line-details">${escapeHtml(it.details)}</div>` : '';
+    return `<tr>
+      <td>${idx + 1}</td><td class="product-col">${escapeHtml(it.name)}${detailsHtml}</td>
+      <td>${fmt(it.rate)}</td>
+    </tr>`;
+  }).join('');
+
+  const taxRowsHtml = !opts.showTax ? '' : (interState
+    ? `<div class="row"><span>IGST</span><span>${fmt(docData.igst)}</span></div>`
+    : `<div class="row"><span>CGST</span><span>${fmt(docData.cgst)}</span></div><div class="row"><span>SGST</span><span>${fmt(docData.sgst)}</span></div>`);
+
+  const consumableRowsHtml = (docData.consumables || []).map((it, idx) => {
+    const detailsHtml = it.details ? `<div class="line-details">${escapeHtml(it.details)}</div>` : '';
+    return `<tr>
+      <td>${idx + 1}</td><td class="product-col">${escapeHtml(it.name)}${detailsHtml}</td>
+      <td>${it.qty}</td><td>${fmt(it.rate)}</td>
+    </tr>`;
+  }).join('');
+
+  container.innerHTML = `
+    <div class="doc-head">
+      <div class="doc-head-left">
+        ${profile.logoDataUrl ? `<img class="doc-logo" src="${profile.logoDataUrl}">` : ''}
+        <div>
+          <div class="biz-title" style="color: ${sanitizeHexColor(profile.nameColor)};">${escapeHtml(profile.name || 'Your Business Name')}</div>
+          <div>${formatAddressHtml(profile.address || '')}</div>
+          ${profile.gstin ? `<div>GSTIN: ${escapeHtml(profile.gstin)}</div>` : ''}
+        </div>
+      </div>
+      <div class="doc-head-right">
+        <div class="doc-title">AMC QUOTATION</div>
+        <div>Quote No: ${escapeHtml(docData.quotationNo || '(will be assigned)')}</div>
+        <div>Quote Date: ${fmtDateShort(docData.date)}</div>
+      </div>
+    </div>
+    <div class="bill-to">
+      <h4>To</h4>
+      <div>${escapeHtml(company ? company.name : '')}</div>
+      <div>${escapeHtml(company ? company.address || '' : '')}</div>
+      ${company && company.gstin ? `<div>GSTIN: ${escapeHtml(company.gstin)}</div>` : ''}
+    </div>
+    ${docData.heading ? `<div class="doc-heading-center">${escapeHtml(docData.heading)}</div>` : ''}
+    <table>
+      <thead><tr><th>#</th><th class="product-col">Product</th><th>Rate</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <div class="totals-box">
+      ${opts.showSubtotal ? `<div class="row"><span>Subtotal</span><span>${fmt(docData.subtotal)}</span></div>` : ''}
+      ${taxRowsHtml}
+      ${opts.showGrandTotal ? `<div class="row grand"><span>Grand Total</span><span>${fmt(docData.total)}</span></div>` : ''}
+    </div>
+    ${docData.terms && docData.terms.length ? `
+      <div class="doc-terms">
+        <div class="doc-terms-title">Terms &amp; Conditions</div>
+        <ol>${docData.terms.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ol>
+      </div>` : ''}
+    <div class="doc-heading-center">${escapeHtml(docData.consumableHeading || 'Consumable Rates')}</div>
+    <table>
+      <thead><tr><th>#</th><th class="product-col">Product</th><th>Qty</th><th>Rate</th></tr></thead>
+      <tbody>${consumableRowsHtml}</tbody>
+    </table>
+    <div class="doc-address-footer">${formatAddressHtml((profile.footerText && profile.footerText.trim()) ? profile.footerText.trim() : [profile.name, profile.address].filter(Boolean).join(' | '))}</div>
+  `;
+}
+
+$('#amcQuotationNextBtn').addEventListener('click', () => {
+  if (!$('#amcQuotationCompany').value) { toast('Select a company'); return; }
+  if (!$('#amcQuotationDate').value) { toast('Date is required'); return; }
+  if (!draft.amcQuotation.items.length) { toast('Add at least one line item'); return; }
+  const [docData, company] = getAmcQuotationDraftDoc();
+  renderAmcQuotationPreview($('#amcQuotationPreviewContent'), docData, company);
+  showAmcQuotationStep('preview');
+});
+
+$('#amcQuotationEditBtn').addEventListener('click', () => showAmcQuotationStep('form'));
+
+$('#amcQuotationDownloadBtn').addEventListener('click', () => {
+  const [docData, company] = getAmcQuotationDraftDoc();
+  const doc = buildAmcQuotationPdf(docData, company, Store.getProfile());
+  doc.save(`${docData.quotationNo.replace(/\//g, '-')}.pdf`);
+});
+
+$('#amcQuotationConfirmBtn').addEventListener('click', withErrorToast(async () => {
+  if (blockIfViewer()) return;
+  const isNew = !$('#amcQuotationId').value;
+  if (!ensureEditingRecordExists('amcQuotation', $('#amcQuotationId').value, Store.getQuotations())) return;
+  const [docData] = getAmcQuotationDraftDoc();
+  if (isNew) {
+    docData.quotationNo = await guardAgainstNumberCollision(
+      [STORAGE_KEYS.quotations], docData.quotationNo,
+      () => Store.getQuotations().map(q => q.quotationNo),
+      getNextQuotationNo, 'Quotation No'
+    );
+  }
+  Store.saveQuotation(docData);
+  closeModal('amcQuotationModal');
+  renderAmcQuotations();
+  toast('AMC Quotation saved');
+}));
+
+document.addEventListener('click', withErrorToast((e) => {
+  const editId = e.target.getAttribute && e.target.getAttribute('data-edit-amcQuotation');
+  if (editId) {
+    const q = Store.getQuotations().find(x => x.id === editId);
+    draft.amcQuotation = {
+      items: JSON.parse(JSON.stringify(q.items || [])),
+      consumables: JSON.parse(JSON.stringify(q.consumables || [])),
+      terms: JSON.parse(JSON.stringify(q.terms || [])),
+    };
+    $('#amcQuotationId').value = q.id;
+    $('#amcQuotationDate').value = q.date;
+    $('#amcQuotationHeading').value = q.heading || '';
+    $('#amcQuotationConsumableHeading').value = q.consumableHeading || 'Consumable Rates';
+    populateProductPicker($('#amcQuotationProductPicker'));
+    populateProductPicker($('#amcQuotationConsumableProductPicker'));
+    populateCompanyDropdowns({ amcQuotation: q.companyId });
+    $('#amcQuotationCompany').value = q.companyId;
+    const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true }, q.displayOptions || {});
+    $('#amcQuotationShowSubtotal').checked = opts.showSubtotal;
+    $('#amcQuotationShowTax').checked = opts.showTax;
+    $('#amcQuotationShowGrandTotal').checked = opts.showGrandTotal;
+    renderAmcLineItems();
+    renderAmcConsumables();
+    renderAmcQuotationTerms();
+    showAmcQuotationStep('form');
+    openModal('amcQuotationModal');
+  }
+  const pdfId = e.target.getAttribute && e.target.getAttribute('data-pdf-amcQuotation');
+  if (pdfId) {
+    const q = Store.getQuotations().find(x => x.id === pdfId);
+    const doc = buildAmcQuotationPdf(q, resolveBillToCompany(q), resolveDocProfile(q));
+    doc.save(`${q.quotationNo.replace(/\//g, '-')}.pdf`);
+  }
+  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-amcQuotation');
+  if (delId) {
+    if (blockIfViewer()) return;
+    if (blockDeleteIfNotAdmin()) return;
+    if (confirm('Delete this AMC quotation?')) { Store.deleteQuotation(delId); renderAmcQuotations(); toast('AMC Quotation deleted'); }
   }
 }));
 
@@ -1640,10 +2354,12 @@ function renderInvoices() {
   invoices = sortState.invoices ? sortRows(invoices, 'invoices') : invoices.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   if (!invoices.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="9">No invoices yet.</td></tr>`;
+    $('#invoicesPagination').innerHTML = '';
     updateSortIndicators('invoices');
     return;
   }
-  tbody.innerHTML = invoices.map(inv => `
+  const pageMeta = paginateRows(invoices, 'invoices');
+  tbody.innerHTML = pageMeta.pageRows.map(inv => `
     <tr>
       <td>${escapeHtml(inv.invoiceNo)}${inv.isProforma ? ' <span class="badge badge-muted">Proforma</span>' : ''}</td>
       <td>${escapeHtml(inv.challanNo || '-')}</td>
@@ -1656,10 +2372,12 @@ function renderInvoices() {
       <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-invoice="${inv.id}">Edit</button>
         <button class="btn btn-secondary btn-sm" data-pdf-invoice="${inv.id}">Download PDF</button>
+        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-invoice="${inv.id}">Send Email</button>` : ''}
         <button class="btn btn-danger btn-sm" data-delete-invoice="${inv.id}">Delete</button>
       </div></td>
     </tr>
   `).join('');
+  $('#invoicesPagination').innerHTML = renderPaginationBar('invoices', pageMeta);
   updateSortIndicators('invoices');
 }
 
@@ -1735,6 +2453,7 @@ function showInvoiceStep(step) {
   $('#invoiceNextBtn').style.display = isForm ? '' : 'none';
   $('#invoiceEditBtn').style.display = isForm ? 'none' : '';
   $('#invoiceDownloadBtn').style.display = isForm ? 'none' : '';
+  $('#invoiceSendEmailBtn').style.display = (isForm || !Store.getEmailTemplates().enabled) ? 'none' : '';
   $('#invoiceConfirmBtn').style.display = isForm ? 'none' : '';
 }
 
@@ -1793,6 +2512,13 @@ $('#invoiceDownloadBtn').addEventListener('click', () => {
   doc.save(`${docData.invoiceNo.replace(/\//g, '-')}.pdf`);
 });
 
+$('#invoiceSendEmailBtn').addEventListener('click', withErrorToast(() => {
+  const [docData, company] = getInvoiceDraftDoc();
+  docData.amountInWords = amountInWords(docData.total);
+  const doc = buildInvoicePdf(docData, company, Store.getProfile());
+  return sendDocumentEmail('invoice', `${docData.invoiceNo.replace(/\//g, '-')}.pdf`, doc);
+}));
+
 $('#invoiceConfirmBtn').addEventListener('click', withErrorToast(async () => {
   if (blockIfViewer()) return;
   const isNew = !$('#invoiceId').value;
@@ -1832,6 +2558,7 @@ $('#invoiceConfirmBtn').addEventListener('click', withErrorToast(async () => {
   closeModal('invoiceModal');
   renderInvoices();
   renderPayments();
+  renderSalesByCompany();
   toast('Invoice saved');
 }));
 
@@ -1871,11 +2598,17 @@ document.addEventListener('click', withErrorToast((e) => {
     const doc = buildInvoicePdf(inv, resolveBillToCompany(inv), resolveDocProfile(inv));
     doc.save(`${inv.invoiceNo.replace(/\//g, '-')}.pdf`);
   }
+  const emailId = e.target.getAttribute && e.target.getAttribute('data-email-invoice');
+  if (emailId) {
+    const inv = Store.getInvoices().find(x => x.id === emailId);
+    const doc = buildInvoicePdf(inv, resolveBillToCompany(inv), resolveDocProfile(inv));
+    return sendDocumentEmail('invoice', `${inv.invoiceNo.replace(/\//g, '-')}.pdf`, doc);
+  }
   const delId = e.target.getAttribute && e.target.getAttribute('data-delete-invoice');
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
-    if (confirm('Delete this invoice?')) { Store.deleteInvoice(delId); renderInvoices(); renderPayments(); toast('Invoice deleted'); }
+    if (confirm('Delete this invoice?')) { Store.deleteInvoice(delId); renderInvoices(); renderPayments(); renderSalesByCompany(); toast('Invoice deleted'); }
   }
 }));
 
@@ -1888,10 +2621,12 @@ function renderServiceReports() {
   reports = sortState.serviceReports ? sortRows(reports, 'serviceReports') : reports.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   if (!reports.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="5">No service reports yet.</td></tr>`;
+    $('#serviceReportsPagination').innerHTML = '';
     updateSortIndicators('serviceReports');
     return;
   }
-  tbody.innerHTML = reports.map(r => `
+  const pageMeta = paginateRows(reports, 'serviceReports');
+  tbody.innerHTML = pageMeta.pageRows.map(r => `
     <tr>
       <td>${escapeHtml(r.reportNo)}</td>
       <td>${fmtDateShort(r.date)}</td>
@@ -1900,10 +2635,12 @@ function renderServiceReports() {
       <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-serviceReport="${r.id}">Edit</button>
         <button class="btn btn-secondary btn-sm" data-pdf-serviceReport="${r.id}">Download PDF</button>
+        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-serviceReport="${r.id}">Send Email</button>` : ''}
         <button class="btn btn-danger btn-sm" data-delete-serviceReport="${r.id}">Delete</button>
       </div></td>
     </tr>
   `).join('');
+  $('#serviceReportsPagination').innerHTML = renderPaginationBar('serviceReports', pageMeta);
   updateSortIndicators('serviceReports');
 }
 
@@ -2066,6 +2803,7 @@ function resetServiceReportModal() {
   populateCompanyDropdowns();
   $('#serviceReportCompany').value = '';
   $('#serviceReportServiceDate').value = '';
+  $('#serviceReportHeading').value = '';
   $('#serviceReportParagraph').value = '';
   $('#serviceReportIncludeSeal').checked = true;
   $('#serviceReportIncludeSignatory').checked = true;
@@ -2083,6 +2821,7 @@ function showServiceReportStep(step) {
   $('#serviceReportNextBtn').style.display = isForm ? '' : 'none';
   $('#serviceReportEditBtn').style.display = isForm ? 'none' : '';
   $('#serviceReportDownloadBtn').style.display = isForm ? 'none' : '';
+  $('#serviceReportSendEmailBtn').style.display = (isForm || !Store.getEmailTemplates().enabled) ? 'none' : '';
   $('#serviceReportConfirmBtn').style.display = isForm ? 'none' : '';
 }
 
@@ -2110,6 +2849,7 @@ function buildServiceReportDraftDoc(extra) {
     companyId,
     date: $('#serviceReportDate').value,
     serviceDate: $('#serviceReportServiceDate').value,
+    heading: $('#serviceReportHeading').value,
     paragraph: $('#serviceReportParagraph').value,
     tables: JSON.parse(JSON.stringify(draft.serviceReport.tables)),
     notes: (draft.serviceReport.notes || []).slice(),
@@ -2144,8 +2884,8 @@ function renderServiceReportPreview(container, docData, company) {
       <div class="doc-head-left">
         ${profile.logoDataUrl ? `<img class="doc-logo" src="${profile.logoDataUrl}">` : ''}
         <div>
-          <div class="biz-title">${escapeHtml(profile.name || 'Your Business Name')}</div>
-          <div>${escapeHtml(profile.address || '')}</div>
+          <div class="biz-title" style="color: ${sanitizeHexColor(profile.nameColor)};">${escapeHtml(profile.name || 'Your Business Name')}</div>
+          <div>${formatAddressHtml(profile.address || '')}</div>
           ${profile.gstin ? `<div>GSTIN: ${escapeHtml(profile.gstin)}</div>` : ''}
         </div>
       </div>
@@ -2153,7 +2893,6 @@ function renderServiceReportPreview(container, docData, company) {
         <div class="doc-title">SERVICE REPORT</div>
         <div>Report No: ${escapeHtml(docData.reportNo || '(will be assigned)')}</div>
         <div>Report Date: ${fmtDateShort(docData.date)}</div>
-        <div>Date of Service: ${docData.serviceDate ? fmtDateShort(docData.serviceDate) : ''}</div>
       </div>
     </div>
     <div class="bill-to">
@@ -2162,11 +2901,13 @@ function renderServiceReportPreview(container, docData, company) {
       <div>${escapeHtml(company ? company.address || '' : '')}</div>
       ${company && company.gstin ? `<div>GSTIN: ${escapeHtml(company.gstin)}</div>` : ''}
     </div>
+    ${docData.heading ? `<div class="doc-heading-center">${escapeHtml(docData.heading)}</div>` : ''}
+    <div class="doc-service-date">Date of Service: ${docData.serviceDate ? fmtDateShort(docData.serviceDate) : ''}</div>
     <div class="doc-paragraph">${escapeHtml(docData.paragraph || '').replace(/\n/g, '<br>')}</div>
     ${tablesHtml}
     ${notesHtml}
     <div class="doc-footer-block" style="justify-content:flex-end;">${signatoryHtml}</div>
-    <div class="doc-address-footer">${escapeHtml(profile.name || '')} — ${escapeHtml(profile.address || '')}</div>
+    <div class="doc-address-footer">${formatAddressHtml((profile.footerText && profile.footerText.trim()) ? profile.footerText.trim() : [profile.name, profile.address].filter(Boolean).join(' | '))}</div>
   `;
 }
 
@@ -2193,6 +2934,12 @@ $('#serviceReportDownloadBtn').addEventListener('click', () => {
   const doc = buildServiceReportPdf(docData, company, Store.getProfile());
   doc.save(`${docData.reportNo.replace(/\//g, '-')}.pdf`);
 });
+
+$('#serviceReportSendEmailBtn').addEventListener('click', withErrorToast(() => {
+  const [docData, company] = getServiceReportDraftDoc();
+  const doc = buildServiceReportPdf(docData, company, Store.getProfile());
+  return sendDocumentEmail('serviceReport', `${docData.reportNo.replace(/\//g, '-')}.pdf`, doc);
+}));
 
 $('#serviceReportConfirmBtn').addEventListener('click', withErrorToast(async () => {
   if (blockIfViewer()) return;
@@ -2224,6 +2971,7 @@ document.addEventListener('click', withErrorToast((e) => {
     $('#serviceReportId').value = r.id;
     $('#serviceReportDate').value = r.date;
     $('#serviceReportServiceDate').value = r.serviceDate || '';
+    $('#serviceReportHeading').value = r.heading || '';
     $('#serviceReportParagraph').value = r.paragraph || '';
     $('#serviceReportIncludeSeal').checked = r.includeSeal !== false;
     $('#serviceReportIncludeSignatory').checked = r.includeSignatory !== false;
@@ -2239,6 +2987,12 @@ document.addEventListener('click', withErrorToast((e) => {
     const r = Store.getServiceReports().find(x => x.id === pdfId);
     const doc = buildServiceReportPdf(r, resolveBillToCompany(r), resolveDocProfile(r));
     doc.save(`${r.reportNo.replace(/\//g, '-')}.pdf`);
+  }
+  const emailId = e.target.getAttribute && e.target.getAttribute('data-email-serviceReport');
+  if (emailId) {
+    const r = Store.getServiceReports().find(x => x.id === emailId);
+    const doc = buildServiceReportPdf(r, resolveBillToCompany(r), resolveDocProfile(r));
+    return sendDocumentEmail('serviceReport', `${r.reportNo.replace(/\//g, '-')}.pdf`, doc);
   }
   const delId = e.target.getAttribute && e.target.getAttribute('data-delete-serviceReport');
   if (delId) {
@@ -2289,10 +3043,13 @@ function renderPurchases() {
   purchases = sortState.purchases ? sortRows(purchases, 'purchases') : purchases.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   if (!all.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="9">No purchases yet.</td></tr>`;
+    $('#purchasesPagination').innerHTML = '';
   } else if (!purchases.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="9">No purchases match your filters.</td></tr>`;
+    $('#purchasesPagination').innerHTML = '';
   } else {
-    tbody.innerHTML = purchases.map(p => `
+    const pageMeta = paginateRows(purchases, 'purchases');
+    tbody.innerHTML = pageMeta.pageRows.map(p => `
       <tr>
         <td>${escapeHtml(p.purchaseNo)}</td>
         <td>${fmtDateShort(p.date)}</td>
@@ -2308,18 +3065,20 @@ function renderPurchases() {
         </div></td>
       </tr>
     `).join('');
+    $('#purchasesPagination').innerHTML = renderPaginationBar('purchases', pageMeta);
   }
   updateSortIndicators('purchases');
 }
 
-$('#purchasesFilterSearch').addEventListener('input', (e) => { filterState.purchases.search = e.target.value; renderPurchases(); });
-$('#purchasesFilterCompany').addEventListener('change', (e) => { filterState.purchases.company = e.target.value; renderPurchases(); });
-$('#purchasesFilterStatus').addEventListener('change', (e) => { filterState.purchases.status = e.target.value; renderPurchases(); });
+$('#purchasesFilterSearch').addEventListener('input', (e) => { filterState.purchases.search = e.target.value; if (paginationState.purchases) paginationState.purchases.page = 1; renderPurchases(); });
+$('#purchasesFilterCompany').addEventListener('change', (e) => { filterState.purchases.company = e.target.value; if (paginationState.purchases) paginationState.purchases.page = 1; renderPurchases(); });
+$('#purchasesFilterStatus').addEventListener('change', (e) => { filterState.purchases.status = e.target.value; if (paginationState.purchases) paginationState.purchases.page = 1; renderPurchases(); });
 $('#purchasesFilterClear').addEventListener('click', () => {
   filterState.purchases = { search: '', company: '', status: '' };
   $('#purchasesFilterSearch').value = '';
   $('#purchasesFilterCompany').value = '';
   $('#purchasesFilterStatus').value = '';
+  if (paginationState.purchases) paginationState.purchases.page = 1;
   renderPurchases();
 });
 
@@ -2358,6 +3117,7 @@ function renderPurchasesByCompany() {
     const total = g.purchases.reduce((sum, p) => sum + (Number(p.total) || 0), 0);
     const expanded = expandedPurchaseCompanies.has(g.company.id);
     const meta = `${g.purchases.length} purchase${g.purchases.length === 1 ? '' : 's'} · Total ${fmt(total)}`;
+    const pageMeta = paginateRows(g.purchases, 'purchasesByCompany', g.company.id);
     return `
     <div class="card accordion-item">
       <div class="accordion-header ${expanded ? 'expanded' : ''}" data-toggle-purchase-company="${g.company.id}">
@@ -2377,8 +3137,9 @@ function renderPurchasesByCompany() {
               <th class="sortable" data-sort-table="purchasesByCompany" data-sort-key="_status" data-sort-type="text">Payment Status</th>
             </tr>
           </thead>
-          <tbody>${g.purchases.map(purchaseRow).join('')}</tbody>
+          <tbody>${pageMeta.pageRows.map(purchaseRow).join('')}</tbody>
         </table>
+        ${renderPaginationBar('purchasesByCompany', pageMeta, g.company.id)}
       </div>
     </div>`;
   }).join('');
@@ -2391,6 +3152,83 @@ document.addEventListener('click', (e) => {
     const cid = toggleHeader.getAttribute('data-toggle-purchase-company');
     if (expandedPurchaseCompanies.has(cid)) expandedPurchaseCompanies.delete(cid); else expandedPurchaseCompanies.add(cid);
     renderPurchasesByCompany();
+  }
+});
+
+/* "Sales by Company" — mirrors renderPurchasesByCompany() above field-for-field,
+   sourced from realInvoices() (Proforma excluded, matching every other sales
+   aggregate) and isSalesCompany companies, using paymentStatusBadge/Text for
+   the richer invoice payment-status display. */
+let expandedSalesCompanies = new Set();
+
+function salesInvoiceRow(inv) {
+  return `
+    <tr>
+      <td>${escapeHtml(inv.invoiceNo)}</td>
+      <td>${fmtDateShort(inv.date)}</td>
+      <td>${fmt(inv.subtotal)}</td>
+      <td>${fmt((Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0))}</td>
+      <td>${fmt(inv.total)}</td>
+      <td>${paymentStatusBadge(inv)}</td>
+    </tr>`;
+}
+
+function renderSalesByCompany() {
+  const container = $('#salesByCompany');
+  const invoices = realInvoices();
+  if (!invoices.length) {
+    container.innerHTML = `<div class="card" style="padding:30px; text-align:center; color:var(--text-muted);">No invoices yet.</div>`;
+    return;
+  }
+  const companies = Store.getCompanies().filter(c => c.isSalesCompany);
+  const groups = companies.map(c => {
+    let list = invoices.filter(inv => inv.companyId === c.id).map(inv => Object.assign({}, inv, {
+      _gst: (Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0),
+      _status: paymentStatusText(inv),
+    }));
+    list = sortState.salesByCompany ? sortRows(list, 'salesByCompany') : list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    return { company: c, invoices: list };
+  }).filter(g => g.invoices.length > 0);
+
+  container.innerHTML = groups.map(g => {
+    const total = g.invoices.reduce((sum, inv) => sum + (Number(inv.total) || 0), 0);
+    const expanded = expandedSalesCompanies.has(g.company.id);
+    const meta = `${g.invoices.length} invoice${g.invoices.length === 1 ? '' : 's'} · Total ${fmt(total)}`;
+    const pageMeta = paginateRows(g.invoices, 'salesByCompany', g.company.id);
+    return `
+    <div class="card accordion-item">
+      <div class="accordion-header ${expanded ? 'expanded' : ''}" data-toggle-sales-company="${g.company.id}">
+        <span class="accordion-caret">&#9656;</span>
+        <span class="accordion-title">${escapeHtml(g.company.name)}</span>
+        <span class="accordion-meta">${meta}</span>
+      </div>
+      <div class="accordion-body" style="display:${expanded ? '' : 'none'};">
+        <table>
+          <thead>
+            <tr>
+              <th class="sortable" data-sort-table="salesByCompany" data-sort-key="invoiceNo" data-sort-type="text">Invoice No</th>
+              <th class="sortable" data-sort-table="salesByCompany" data-sort-key="date" data-sort-type="date">Date</th>
+              <th class="sortable" data-sort-table="salesByCompany" data-sort-key="subtotal" data-sort-type="number">Total</th>
+              <th class="sortable" data-sort-table="salesByCompany" data-sort-key="_gst" data-sort-type="number">GST</th>
+              <th class="sortable" data-sort-table="salesByCompany" data-sort-key="total" data-sort-type="number">Invoice Total</th>
+              <th class="sortable" data-sort-table="salesByCompany" data-sort-key="_status" data-sort-type="text">Payment Status</th>
+            </tr>
+          </thead>
+          <tbody>${pageMeta.pageRows.map(salesInvoiceRow).join('')}</tbody>
+        </table>
+        ${renderPaginationBar('salesByCompany', pageMeta, g.company.id)}
+      </div>
+    </div>`;
+  }).join('');
+  updateSortIndicators('salesByCompany');
+}
+
+document.addEventListener('click', (e) => {
+  const toggleHeader = e.target.closest && e.target.closest('[data-toggle-sales-company]');
+  if (toggleHeader) {
+    const cid = toggleHeader.getAttribute('data-toggle-sales-company');
+    if (expandedSalesCompanies.has(cid)) expandedSalesCompanies.delete(cid); else expandedSalesCompanies.add(cid);
+    renderSalesByCompany();
   }
 });
 
@@ -2505,10 +3343,13 @@ function renderExpenses() {
   expenses = sortState.expenses ? sortRows(expenses, 'expenses') : expenses.sort((a, b) => new Date(b.date) - new Date(a.date));
   if (!all.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="5">No expenses recorded yet.</td></tr>`;
+    $('#expensesPagination').innerHTML = '';
   } else if (!expenses.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="5">No expenses match your filters.</td></tr>`;
+    $('#expensesPagination').innerHTML = '';
   } else {
-    tbody.innerHTML = expenses.map(e => `
+    const pageMeta = paginateRows(expenses, 'expenses');
+    tbody.innerHTML = pageMeta.pageRows.map(e => `
       <tr>
         <td>${fmtDateShort(e.date)}</td>
         <td>${escapeHtml(e.category)}</td>
@@ -2520,16 +3361,18 @@ function renderExpenses() {
         </div></td>
       </tr>
     `).join('');
+    $('#expensesPagination').innerHTML = renderPaginationBar('expenses', pageMeta);
   }
   updateSortIndicators('expenses');
 }
 
-$('#expensesFilterSearch').addEventListener('input', (e) => { filterState.expenses.search = e.target.value; renderExpenses(); });
-$('#expensesFilterCategory').addEventListener('change', (e) => { filterState.expenses.category = e.target.value; renderExpenses(); });
+$('#expensesFilterSearch').addEventListener('input', (e) => { filterState.expenses.search = e.target.value; if (paginationState.expenses) paginationState.expenses.page = 1; renderExpenses(); });
+$('#expensesFilterCategory').addEventListener('change', (e) => { filterState.expenses.category = e.target.value; if (paginationState.expenses) paginationState.expenses.page = 1; renderExpenses(); });
 $('#expensesFilterClear').addEventListener('click', () => {
   filterState.expenses = { search: '', category: '' };
   $('#expensesFilterSearch').value = '';
   $('#expensesFilterCategory').value = '';
+  if (paginationState.expenses) paginationState.expenses.page = 1;
   renderExpenses();
 });
 
@@ -2599,6 +3442,10 @@ const CONFIG_TYPES = {
     getAll: () => Store.getTermsTemplates(), save: (r) => Store.saveTermsTemplate(r), del: (id) => Store.deleteTermsTemplate(id),
     field: 'text', fieldKind: 'textarea', label: 'Clause Text', tbody: '#termsConfigTbody',
   },
+  amcTerm: {
+    getAll: () => Store.getAmcTermsTemplates(), save: (r) => Store.saveAmcTermsTemplate(r), del: (id) => Store.deleteAmcTermsTemplate(id),
+    field: 'text', fieldKind: 'textarea', label: 'Clause Text', tbody: '#amcTermsConfigTbody',
+  },
 };
 
 function renderConfigTable(type) {
@@ -2622,7 +3469,8 @@ function renderUnitsConfig() { renderConfigTable('unit'); }
 function renderGstRatesConfig() { renderConfigTable('gstRate'); }
 function renderExpenseCategoriesConfig() { renderConfigTable('expenseCategory'); }
 function renderTermsConfig() { renderConfigTable('term'); }
-function renderAllConfigTables() { renderUnitsConfig(); renderGstRatesConfig(); renderExpenseCategoriesConfig(); renderTermsConfig(); }
+function renderAmcTermsConfig() { renderConfigTable('amcTerm'); }
+function renderAllConfigTables() { renderUnitsConfig(); renderGstRatesConfig(); renderExpenseCategoriesConfig(); renderTermsConfig(); renderAmcTermsConfig(); }
 
 function openConfigModal(type, id) {
   const cfg = CONFIG_TYPES[type];
@@ -2772,6 +3620,7 @@ function renderPayments() {
     const outstanding = g.invoices.reduce((sum, inv) => sum + Math.max(invoiceBalance(inv), 0), 0);
     const expanded = expandedPaymentCompanies.has(g.company.id);
     const meta = `${g.invoices.length} invoice${g.invoices.length === 1 ? '' : 's'} · Outstanding ${fmt(outstanding)}`;
+    const pageMeta = paginateRows(g.invoices, 'payments', g.company.id);
     return `
     <div class="card accordion-item">
       <div class="accordion-header ${expanded ? 'expanded' : ''}" data-toggle-company="${g.company.id}">
@@ -2796,8 +3645,9 @@ function renderPayments() {
               <th>Actions</th>
             </tr>
           </thead>
-          <tbody>${g.invoices.map(paymentInvoiceRow).join('')}</tbody>
+          <tbody>${pageMeta.pageRows.map(paymentInvoiceRow).join('')}</tbody>
         </table>
+        ${renderPaginationBar('payments', pageMeta, g.company.id)}
       </div>
     </div>`;
   }).join('');
@@ -2869,6 +3719,7 @@ $('#savePaymentBtn').addEventListener('click', withErrorToast(() => {
   closeModal('paymentModal');
   renderInvoices();
   renderPayments();
+  renderSalesByCompany();
   toast('Payment recorded');
 }));
 
@@ -3158,11 +4009,13 @@ const CHART_COLORS = ['#2f6fed', '#1a9c5f', '#d9432f', '#b8860b', '#7c3aed', '#0
 function colorForIndex(i) { return CHART_COLORS[i % CHART_COLORS.length]; }
 
 /** Sums every invoice's total by company — all-time, no period filter, so any invoice (past, present, or backdated) always counts. */
-function computeCompanySalesTotals() {
+function computeCompanySalesTotals(fy) {
   const totals = new Map(); // companyId -> total
-  realInvoices().forEach(inv => {
-    totals.set(inv.companyId, (totals.get(inv.companyId) || 0) + (Number(inv.total) || 0));
-  });
+  realInvoices()
+    .filter(inv => fy === undefined || currentFinancialYear(parseLocalDate(inv.date)) === fy)
+    .forEach(inv => {
+      totals.set(inv.companyId, (totals.get(inv.companyId) || 0) + (Number(inv.total) || 0));
+    });
   return Array.from(totals.entries())
     .map(([companyId, total]) => ({ name: companyName(companyId) || 'Unknown Company', value: Math.round(total * 100) / 100 }))
     .filter(s => s.value > 0.009)
@@ -3170,15 +4023,17 @@ function computeCompanySalesTotals() {
 }
 
 /** Sums every invoice line item's total (qty*rate*(1+gst%), matching pdf.js's buildItemRows) by product name — all-time, no period filter. */
-function computeProductSalesTotals() {
+function computeProductSalesTotals(fy) {
   const totals = new Map(); // product name -> total
-  realInvoices().forEach(inv => {
-    (inv.items || []).forEach(item => {
-      const taxable = (Number(item.qty) || 0) * (Number(item.rate) || 0);
-      const lineTotal = taxable * (1 + (Number(item.gstPercent) || 0) / 100);
-      totals.set(item.name, (totals.get(item.name) || 0) + lineTotal);
+  realInvoices()
+    .filter(inv => fy === undefined || currentFinancialYear(parseLocalDate(inv.date)) === fy)
+    .forEach(inv => {
+      (inv.items || []).forEach(item => {
+        const taxable = (Number(item.qty) || 0) * (Number(item.rate) || 0);
+        const lineTotal = taxable * (1 + (Number(item.gstPercent) || 0) / 100);
+        totals.set(item.name, (totals.get(item.name) || 0) + lineTotal);
+      });
     });
-  });
   return Array.from(totals.entries())
     .map(([name, total]) => ({ name, value: Math.round(total * 100) / 100 }))
     .filter(s => s.value > 0.009)
@@ -3264,11 +4119,13 @@ function computeProductSalesByPeriod(mode) {
 }
 
 /** Sums every purchase's total by company — all-time, no period filter, mirrors computeCompanySalesTotals. */
-function computePurchaseCompanyTotals() {
+function computePurchaseCompanyTotals(fy) {
   const totals = new Map(); // companyId -> total
-  Store.getPurchases().forEach(p => {
-    totals.set(p.companyId, (totals.get(p.companyId) || 0) + (Number(p.total) || 0));
-  });
+  Store.getPurchases()
+    .filter(p => fy === undefined || currentFinancialYear(parseLocalDate(p.date)) === fy)
+    .forEach(p => {
+      totals.set(p.companyId, (totals.get(p.companyId) || 0) + (Number(p.total) || 0));
+    });
   return Array.from(totals.entries())
     .map(([companyId, total]) => ({ name: companyName(companyId) || 'Unknown Company', value: Math.round(total * 100) / 100 }))
     .filter(s => s.value > 0.009)
@@ -3276,12 +4133,14 @@ function computePurchaseCompanyTotals() {
 }
 
 /** Sums every cash/manual expense's amount by category — all-time, no period filter. */
-function computeExpenseCategoryTotals() {
+function computeExpenseCategoryTotals(fy) {
   const totals = new Map(); // category -> total
-  Store.getExpenses().forEach(e => {
-    const cat = e.category || 'Uncategorized';
-    totals.set(cat, (totals.get(cat) || 0) + (Number(e.amount) || 0));
-  });
+  Store.getExpenses()
+    .filter(e => fy === undefined || currentFinancialYear(parseLocalDate(e.date)) === fy)
+    .forEach(e => {
+      const cat = e.category || 'Uncategorized';
+      totals.set(cat, (totals.get(cat) || 0) + (Number(e.amount) || 0));
+    });
   return Array.from(totals.entries())
     .map(([name, total]) => ({ name, value: Math.round(total * 100) / 100 }))
     .filter(s => s.value > 0.009)
@@ -3408,17 +4267,26 @@ function renderBarChart(canvasSel, emptyElSel, prevInstance, labels, datasets) {
  * of date) and a Trend bar chart (Monthly/Quarterly/FY, one series per company/product/category)
  * — sharing this one config-driven implementation instead of near-identical copies.
  */
+/* Lists every FY that has at least one record for the given date strings —
+   used to populate each chart's "Financial Year" dropdown, scoped to just
+   that chart's own entity (unlike getFinancialYearOptions() below, which
+   unions invoices+purchases+expenses together for the Export modal). */
+function financialYearsFromDates(dateStrs) {
+  const keys = new Set(dateStrs.filter(Boolean).map(d => currentFinancialYear(parseLocalDate(d))));
+  return Array.from(keys).sort().reverse();
+}
+
 const SALES_CHARTS = {
-  company: { prefix: 'companySales', computeTotals: computeCompanySalesTotals, computeByPeriod: computeCompanySalesByPeriod },
-  product: { prefix: 'productSales', computeTotals: computeProductSalesTotals, computeByPeriod: computeProductSalesByPeriod },
-  purchaseCompany: { prefix: 'purchaseCompany', computeTotals: computePurchaseCompanyTotals, computeByPeriod: computePurchaseCompanyByPeriod },
-  expenseCategory: { prefix: 'expenseCategory', computeTotals: computeExpenseCategoryTotals, computeByPeriod: computeExpenseCategoryByPeriod },
+  company: { prefix: 'companySales', computeTotals: computeCompanySalesTotals, computeByPeriod: computeCompanySalesByPeriod, getFYs: () => financialYearsFromDates(realInvoices().map(inv => inv.date)) },
+  product: { prefix: 'productSales', computeTotals: computeProductSalesTotals, computeByPeriod: computeProductSalesByPeriod, getFYs: () => financialYearsFromDates(realInvoices().map(inv => inv.date)) },
+  purchaseCompany: { prefix: 'purchaseCompany', computeTotals: computePurchaseCompanyTotals, computeByPeriod: computePurchaseCompanyByPeriod, getFYs: () => financialYearsFromDates(Store.getPurchases().map(p => p.date)) },
+  expenseCategory: { prefix: 'expenseCategory', computeTotals: computeExpenseCategoryTotals, computeByPeriod: computeExpenseCategoryByPeriod, getFYs: () => financialYearsFromDates(Store.getExpenses().map(e => e.date)) },
 };
 const salesChartState = {
-  company: { view: 'breakdown', trend: 'annual', instance: null },
-  product: { view: 'breakdown', trend: 'annual', instance: null },
-  purchaseCompany: { view: 'breakdown', trend: 'annual', instance: null },
-  expenseCategory: { view: 'breakdown', trend: 'annual', instance: null },
+  company: { view: 'breakdown', trend: 'annual', fy: null, instance: null },
+  product: { view: 'breakdown', trend: 'annual', fy: null, instance: null },
+  purchaseCompany: { view: 'breakdown', trend: 'annual', fy: null, instance: null },
+  expenseCategory: { view: 'breakdown', trend: 'annual', fy: null, instance: null },
 };
 
 function renderSalesChart(key) {
@@ -3429,9 +4297,26 @@ function renderSalesChart(key) {
   if (state.view === 'trend') {
     const { labels, datasets } = cfg.computeByPeriod(state.trend);
     state.instance = renderBarChart(canvasSel, emptySel, state.instance, labels, datasets);
+  } else if (state.view === 'fy') {
+    populateFYSelect(key);
+    state.instance = renderPieChart(canvasSel, emptySel, state.instance, cfg.computeTotals(state.fy));
   } else {
     state.instance = renderPieChart(canvasSel, emptySel, state.instance, cfg.computeTotals());
   }
+}
+
+/* Rebuilds a chart's Financial Year <select> options from whatever FYs
+   currently have data, keeping the current selection if it's still valid
+   (e.g. re-render after a save), else defaulting to the newest FY. */
+function populateFYSelect(key) {
+  const cfg = SALES_CHARTS[key];
+  const state = salesChartState[key];
+  const fys = cfg.getFYs();
+  if (!state.fy || !fys.includes(state.fy)) state.fy = fys[0] || null;
+  const sel = $(`#${cfg.prefix}FYSelect`);
+  sel.innerHTML = fys.length
+    ? fys.map(fy => `<option value="${fy}" ${fy === state.fy ? 'selected' : ''}>FY ${fy}</option>`).join('')
+    : `<option value="">No data yet</option>`;
 }
 
 function wireSalesChartToggles(key) {
@@ -3440,14 +4325,31 @@ function wireSalesChartToggles(key) {
     salesChartState[key].view = 'breakdown';
     $(`#${p}ViewBreakdownBtn`).classList.add('active');
     $(`#${p}ViewTrendBtn`).classList.remove('active');
+    $(`#${p}ViewFYBtn`).classList.remove('active');
     $(`#${p}TrendToggleRow`).style.display = 'none';
+    $(`#${p}FYToggleRow`).style.display = 'none';
     renderSalesChart(key);
   });
   $(`#${p}ViewTrendBtn`).addEventListener('click', () => {
     salesChartState[key].view = 'trend';
     $(`#${p}ViewTrendBtn`).classList.add('active');
     $(`#${p}ViewBreakdownBtn`).classList.remove('active');
+    $(`#${p}ViewFYBtn`).classList.remove('active');
     $(`#${p}TrendToggleRow`).style.display = 'flex';
+    $(`#${p}FYToggleRow`).style.display = 'none';
+    renderSalesChart(key);
+  });
+  $(`#${p}ViewFYBtn`).addEventListener('click', () => {
+    salesChartState[key].view = 'fy';
+    $(`#${p}ViewFYBtn`).classList.add('active');
+    $(`#${p}ViewBreakdownBtn`).classList.remove('active');
+    $(`#${p}ViewTrendBtn`).classList.remove('active');
+    $(`#${p}TrendToggleRow`).style.display = 'none';
+    $(`#${p}FYToggleRow`).style.display = 'flex';
+    renderSalesChart(key);
+  });
+  $(`#${p}FYSelect`).addEventListener('change', (e) => {
+    salesChartState[key].fy = e.target.value;
     renderSalesChart(key);
   });
   const trendIds = { monthly: `#${p}MonthlyBtn`, quarterly: `#${p}QuarterlyBtn`, annual: `#${p}AnnualBtn` };
@@ -3616,6 +4518,7 @@ const SYNC_ENTITY_LABELS = {
   [STORAGE_KEYS.gstRates]: 'GST Rates',
   [STORAGE_KEYS.expenseCategories]: 'Expense Categories',
   [STORAGE_KEYS.termsTemplates]: 'Terms & Conditions',
+  [STORAGE_KEYS.amcTermsTemplates]: 'Terms & Conditions for AMC Quotation',
 };
 
 function syncRecordLabel(record) {
@@ -3816,14 +4719,17 @@ async function renderErrorLogs() {
   const tbody = $('#errorLogsTbody');
   if (!tbody) return;
   tbody.innerHTML = `<tr class="empty-row"><td colspan="6">Loading…</td></tr>`;
+  $('#errorLogsPagination').innerHTML = '';
   try {
     let rows = await ErrorLog.fetchRecent(200);
     if (!rows.length) {
       tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No errors logged yet.</td></tr>`;
+      $('#errorLogsPagination').innerHTML = '';
       return;
     }
     rows = sortState.errorLogs ? sortRows(rows, 'errorLogs') : rows;
-    tbody.innerHTML = rows.map(r => `
+    const pageMeta = paginateRows(rows, 'errorLogs');
+    tbody.innerHTML = pageMeta.pageRows.map(r => `
       <tr>
         <td>${escapeHtml(new Date(r.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }))}</td>
         <td>${escapeHtml(r.source || '-')}</td>
@@ -3833,9 +4739,11 @@ async function renderErrorLogs() {
         <td>${r.details ? `<details><summary>View</summary><pre>${escapeHtml(r.details)}</pre></details>` : '-'}</td>
       </tr>
     `).join('');
+    $('#errorLogsPagination').innerHTML = renderPaginationBar('errorLogs', pageMeta);
     updateSortIndicators('errorLogs');
   } catch (e) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="6">Could not load logs: ${escapeHtml(e.message || String(e))}</td></tr>`;
+    $('#errorLogsPagination').innerHTML = '';
   }
 }
 
@@ -3860,10 +4768,12 @@ Object.assign(SORT_RENDER_FNS, {
   products: renderProducts,
   companies: renderCompanies,
   quotations: renderQuotations,
+  amcQuotations: renderAmcQuotations,
   invoices: renderInvoices,
   serviceReports: renderServiceReports,
   purchases: renderPurchases,
   purchasesByCompany: renderPurchasesByCompany,
+  salesByCompany: renderSalesByCompany,
   expenses: renderExpenses,
   payments: renderPayments,
   summaryOutstanding: renderSummaryOutstanding,

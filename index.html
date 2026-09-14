@@ -101,6 +101,7 @@
         <button type="button" data-settings-action="userConfig">User Configuration</button>
         <button type="button" data-settings-action="dbConnection">DB Connection</button>
         <button type="button" data-settings-action="tabLayout">Tab Layout</button>
+        <button type="button" data-settings-action="emailTemplates">Email Templates</button>
         <button type="button" id="btnSyncToDb" data-settings-action="syncToDb" title="Compare local data with the database and push changes after review">Sync to DB</button>
         <button type="button" id="btnDownloadDbSnapshot" data-settings-action="downloadDbSnapshot" title="Fetch the latest data from the database and download it as business-suite-data.json">Download DB Snapshot</button>
       </div>
@@ -114,7 +115,7 @@
   <button class="tab-btn" data-tab="purchases">Purchase</button>
   <button class="tab-btn" data-tab="products">Products</button>
   <button class="tab-btn" data-tab="companies">Company</button>
-  <button class="tab-btn" data-group="charts">Charts</button>
+  <button class="tab-btn" data-group="charts">Charts/Reports</button>
   <button class="tab-btn" data-tab="errorLogs" id="navErrorLogs">Error Logs</button>
 </nav>
 
@@ -129,6 +130,7 @@
   <button class="tab-btn sub" data-tab="invoices">Invoices</button>
   <button class="tab-btn sub" data-tab="payments">Payments</button>
   <button class="tab-btn sub" data-tab="serviceReports">Service Reports</button>
+  <button class="tab-btn sub" data-tab="amcQuotations">AMC Quotation</button>
 </nav>
 
 <nav class="tabs tabs-sub" id="subnav-charts">
@@ -137,6 +139,7 @@
   <button class="tab-btn sub" data-tab="pendingPaymentsChart">Pending Payments</button>
   <button class="tab-btn sub" data-tab="purchaseCompanyChart">Purchases by Company</button>
   <button class="tab-btn sub" data-tab="expenseCategoryChart">Cash / Manual Expenses</button>
+  <button class="tab-btn sub" data-tab="reports">Reports</button>
 </nav>
 
 <!-- ===================== PRODUCTS ===================== -->
@@ -167,6 +170,7 @@
       </thead>
       <tbody id="productsTbody"></tbody>
     </table>
+    <div class="table-pagination" id="productsPagination"></div>
   </div>
 </section>
 
@@ -200,6 +204,7 @@
       </thead>
       <tbody id="companiesTbody"></tbody>
     </table>
+    <div class="table-pagination" id="companiesPagination"></div>
   </div>
 </section>
 
@@ -237,12 +242,8 @@
       </thead>
       <tbody id="purchasesTbody"></tbody>
     </table>
+    <div class="table-pagination" id="purchasesPagination"></div>
   </div>
-
-  <div class="panel-header" style="margin-top:28px;">
-    <h2>Purchases by Company</h2>
-  </div>
-  <div id="purchasesByCompany"></div>
 
   <div class="panel-header" style="margin-top:28px;">
     <h2>Cash / Manual Expenses</h2>
@@ -266,6 +267,7 @@
       </thead>
       <tbody id="expensesTbody"></tbody>
     </table>
+    <div class="table-pagination" id="expensesPagination"></div>
   </div>
 </section>
 
@@ -287,6 +289,29 @@
       </thead>
       <tbody id="quotationsTbody"></tbody>
     </table>
+    <div class="table-pagination" id="quotationsPagination"></div>
+  </div>
+</section>
+
+<!-- ===================== AMC QUOTATIONS ===================== -->
+<section class="tab-panel" id="tab-amcQuotations">
+  <div class="panel-header">
+    <h2>AMC Quotation</h2>
+    <button class="btn btn-primary" id="btnAddAmcQuotation">+ Create AMC Quotation</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th class="sortable" data-sort-table="amcQuotations" data-sort-key="quotationNo" data-sort-type="text">Quotation No</th>
+          <th class="sortable" data-sort-table="amcQuotations" data-sort-key="date" data-sort-type="date">Date</th>
+          <th class="sortable" data-sort-table="amcQuotations" data-sort-key="_companyName" data-sort-type="text">Company</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="amcQuotationsTbody"></tbody>
+    </table>
+    <div class="table-pagination" id="amcQuotationsPagination"></div>
   </div>
 </section>
 
@@ -313,6 +338,7 @@
       </thead>
       <tbody id="invoicesTbody"></tbody>
     </table>
+    <div class="table-pagination" id="invoicesPagination"></div>
   </div>
 </section>
 
@@ -341,6 +367,7 @@
       </thead>
       <tbody id="serviceReportsTbody"></tbody>
     </table>
+    <div class="table-pagination" id="serviceReportsPagination"></div>
   </div>
 </section>
 
@@ -459,12 +486,16 @@
       <div class="seg-toggle">
         <button class="seg-btn active" id="companySalesViewBreakdownBtn" type="button">Breakdown</button>
         <button class="seg-btn" id="companySalesViewTrendBtn" type="button">Trend</button>
+        <button class="seg-btn" id="companySalesViewFYBtn" type="button">Financial Year</button>
       </div>
     </div>
     <div class="seg-toggle" id="companySalesTrendToggleRow" style="display:none; margin-bottom:14px;">
       <button class="seg-btn" id="companySalesMonthlyBtn" type="button">Monthly</button>
       <button class="seg-btn" id="companySalesQuarterlyBtn" type="button">Quarterly</button>
       <button class="seg-btn active" id="companySalesAnnualBtn" type="button">FY</button>
+    </div>
+    <div class="chart-fy-row" id="companySalesFYToggleRow" style="display:none; margin-bottom:14px;">
+      <select id="companySalesFYSelect"></select>
     </div>
     <div class="chart-wrap">
       <canvas id="companySalesChartCanvas"></canvas>
@@ -483,12 +514,16 @@
       <div class="seg-toggle">
         <button class="seg-btn active" id="productSalesViewBreakdownBtn" type="button">Breakdown</button>
         <button class="seg-btn" id="productSalesViewTrendBtn" type="button">Trend</button>
+        <button class="seg-btn" id="productSalesViewFYBtn" type="button">Financial Year</button>
       </div>
     </div>
     <div class="seg-toggle" id="productSalesTrendToggleRow" style="display:none; margin-bottom:14px;">
       <button class="seg-btn" id="productSalesMonthlyBtn" type="button">Monthly</button>
       <button class="seg-btn" id="productSalesQuarterlyBtn" type="button">Quarterly</button>
       <button class="seg-btn active" id="productSalesAnnualBtn" type="button">FY</button>
+    </div>
+    <div class="chart-fy-row" id="productSalesFYToggleRow" style="display:none; margin-bottom:14px;">
+      <select id="productSalesFYSelect"></select>
     </div>
     <div class="chart-wrap">
       <canvas id="productSalesChartCanvas"></canvas>
@@ -522,6 +557,7 @@
       <div class="seg-toggle">
         <button class="seg-btn active" id="purchaseCompanyViewBreakdownBtn" type="button">Breakdown</button>
         <button class="seg-btn" id="purchaseCompanyViewTrendBtn" type="button">Trend</button>
+        <button class="seg-btn" id="purchaseCompanyViewFYBtn" type="button">Financial Year</button>
       </div>
     </div>
     <div class="seg-toggle" id="purchaseCompanyTrendToggleRow" style="display:none; margin-bottom:14px;">
@@ -529,11 +565,25 @@
       <button class="seg-btn" id="purchaseCompanyQuarterlyBtn" type="button">Quarterly</button>
       <button class="seg-btn active" id="purchaseCompanyAnnualBtn" type="button">FY</button>
     </div>
+    <div class="chart-fy-row" id="purchaseCompanyFYToggleRow" style="display:none; margin-bottom:14px;">
+      <select id="purchaseCompanyFYSelect"></select>
+    </div>
     <div class="chart-wrap">
       <canvas id="purchaseCompanyChartCanvas"></canvas>
     </div>
     <div class="card" id="purchaseCompanyChartEmpty" style="display:none; box-shadow:none; border:none; text-align:center; color:var(--text-muted); padding:30px 0;">No purchases yet to chart.</div>
   </div>
+</section>
+
+<!-- ===================== REPORTS ===================== -->
+<section class="tab-panel" id="tab-reports">
+  <div class="panel-header"><h2>Reports</h2></div>
+
+  <div class="panel-header" style="margin-top:0;"><h3 style="margin:0;">Sales by Company</h3></div>
+  <div id="salesByCompany"></div>
+
+  <div class="panel-header" style="margin-top:28px;"><h3 style="margin:0;">Purchases by Company</h3></div>
+  <div id="purchasesByCompany"></div>
 </section>
 
 <!-- ===================== CASH / MANUAL EXPENSES CHART ===================== -->
@@ -546,12 +596,16 @@
       <div class="seg-toggle">
         <button class="seg-btn active" id="expenseCategoryViewBreakdownBtn" type="button">Breakdown</button>
         <button class="seg-btn" id="expenseCategoryViewTrendBtn" type="button">Trend</button>
+        <button class="seg-btn" id="expenseCategoryViewFYBtn" type="button">Financial Year</button>
       </div>
     </div>
     <div class="seg-toggle" id="expenseCategoryTrendToggleRow" style="display:none; margin-bottom:14px;">
       <button class="seg-btn" id="expenseCategoryMonthlyBtn" type="button">Monthly</button>
       <button class="seg-btn" id="expenseCategoryQuarterlyBtn" type="button">Quarterly</button>
       <button class="seg-btn active" id="expenseCategoryAnnualBtn" type="button">FY</button>
+    </div>
+    <div class="chart-fy-row" id="expenseCategoryFYToggleRow" style="display:none; margin-bottom:14px;">
+      <select id="expenseCategoryFYSelect"></select>
     </div>
     <div class="chart-wrap">
       <canvas id="expenseCategoryChartCanvas"></canvas>
@@ -586,6 +640,7 @@
       </thead>
       <tbody id="errorLogsTbody"></tbody>
     </table>
+    <div class="table-pagination" id="errorLogsPagination"></div>
   </div>
 </section>
 
@@ -759,8 +814,120 @@
       <span class="spacer"></span>
       <button class="btn btn-secondary" id="quotationEditBtn" style="display:none;">Edit</button>
       <button class="btn btn-secondary" id="quotationDownloadBtn" style="display:none;">Download PDF</button>
+      <button class="btn btn-secondary" id="quotationSendEmailBtn" style="display:none;">Send Email</button>
       <button class="btn btn-primary" id="quotationNextBtn">Next: Preview</button>
       <button class="btn btn-primary" id="quotationConfirmBtn" data-mutating style="display:none;">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== AMC QUOTATION MODAL (two-step) ===================== -->
+<div class="modal-overlay" id="amcQuotationModal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Create AMC Quotation</h3>
+      <button class="modal-close" data-close="amcQuotationModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="step-indicator">
+        <span class="step active" id="amcQuotationStepLabel1">1. Details</span>
+        <span>&rsaquo;</span>
+        <span class="step" id="amcQuotationStepLabel2">2. Preview</span>
+      </div>
+
+      <!-- Step 1: form -->
+      <div id="amcQuotationStepForm">
+        <input type="hidden" id="amcQuotationId">
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="amcQuotationCompany">Company</label>
+            <select id="amcQuotationCompany" required></select>
+          </div>
+          <div class="form-field">
+            <label for="amcQuotationDate">Date</label>
+            <input type="date" id="amcQuotationDate" required>
+          </div>
+        </div>
+
+        <div class="form-field" style="margin-top:14px;">
+          <label for="amcQuotationHeading">Heading (optional, bold &amp; centered)</label>
+          <input type="text" id="amcQuotationHeading" placeholder="Prints bold and centered below the To section">
+        </div>
+
+        <div class="form-grid" style="margin-top:14px;">
+          <div class="form-field">
+            <label for="amcQuotationProductPicker">Add Product</label>
+            <select id="amcQuotationProductPicker"></select>
+          </div>
+          <div class="form-field" style="justify-content:flex-end;">
+            <button type="button" class="btn btn-secondary" id="amcQuotationAddLineBtn">+ Add Line Item</button>
+          </div>
+        </div>
+
+        <table class="line-items-table" id="amcQuotationLineItemsTable">
+          <thead>
+            <tr><th class="product-col">Product</th><th class="num-col">Rate</th><th></th></tr>
+          </thead>
+          <tbody id="amcQuotationLineItemsBody"></tbody>
+        </table>
+
+        <div class="totals-box" id="amcQuotationTotalsBox"></div>
+
+        <div class="display-options">
+          <span class="display-options-label">Show on AMC Quotation:</span>
+          <label><input type="checkbox" id="amcQuotationShowSubtotal"> Subtotal</label>
+          <label><input type="checkbox" id="amcQuotationShowTax"> Tax (CGST/SGST/IGST)</label>
+          <label><input type="checkbox" id="amcQuotationShowGrandTotal"> Grand Total</label>
+        </div>
+
+        <div style="margin-top:18px;">
+          <label>Terms &amp; Conditions</label>
+          <table class="line-items-table" id="amcQuotationTermsTable">
+            <thead>
+              <tr><th style="width:30px;">#</th><th>Term</th><th></th></tr>
+            </thead>
+            <tbody id="amcQuotationTermsBody"></tbody>
+          </table>
+          <button type="button" class="btn btn-secondary" id="amcQuotationAddTermBtn">+ Add Term</button>
+        </div>
+
+        <div style="margin-top:18px;">
+          <div class="form-field">
+            <label for="amcQuotationConsumableHeading">Consumable Rates — Heading (bold &amp; centered, own page)</label>
+            <input type="text" id="amcQuotationConsumableHeading" placeholder="Consumable Rates">
+          </div>
+        </div>
+
+        <div class="form-grid" style="margin-top:14px;">
+          <div class="form-field">
+            <label for="amcQuotationConsumableProductPicker">Add Product</label>
+            <select id="amcQuotationConsumableProductPicker"></select>
+          </div>
+          <div class="form-field" style="justify-content:flex-end;">
+            <button type="button" class="btn btn-secondary" id="amcQuotationConsumableAddLineBtn">+ Add Line Item</button>
+          </div>
+        </div>
+
+        <table class="line-items-table" id="amcQuotationConsumablesTable">
+          <thead>
+            <tr><th class="product-col">Product</th><th class="num-col">Qty</th><th class="num-col">Rate</th><th></th></tr>
+          </thead>
+          <tbody id="amcQuotationConsumablesBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Step 2: preview -->
+      <div id="amcQuotationStepPreview" style="display:none;">
+        <div class="doc-preview" id="amcQuotationPreviewContent"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="amcQuotationModal">Cancel</button>
+      <span class="spacer"></span>
+      <button class="btn btn-secondary" id="amcQuotationEditBtn" style="display:none;">Edit</button>
+      <button class="btn btn-secondary" id="amcQuotationDownloadBtn" style="display:none;">Download PDF</button>
+      <button class="btn btn-primary" id="amcQuotationNextBtn">Next: Preview</button>
+      <button class="btn btn-primary" id="amcQuotationConfirmBtn" data-mutating style="display:none;">Confirm</button>
     </div>
   </div>
 </div>
@@ -867,6 +1034,7 @@
       <span class="spacer"></span>
       <button class="btn btn-secondary" id="invoiceEditBtn" style="display:none;">Edit</button>
       <button class="btn btn-secondary" id="invoiceDownloadBtn" style="display:none;">Download PDF</button>
+      <button class="btn btn-secondary" id="invoiceSendEmailBtn" style="display:none;">Send Email</button>
       <button class="btn btn-primary" id="invoiceNextBtn">Next: Preview</button>
       <button class="btn btn-primary" id="invoiceConfirmBtn" data-mutating style="display:none;">Confirm</button>
     </div>
@@ -902,6 +1070,13 @@
           <div class="form-field">
             <label for="serviceReportServiceDate">Date of Service</label>
             <input type="date" id="serviceReportServiceDate">
+          </div>
+        </div>
+
+        <div style="margin-top:18px;">
+          <div class="form-field">
+            <label for="serviceReportHeading">Heading (optional — bold, centered)</label>
+            <input type="text" id="serviceReportHeading" placeholder="Prints bold and centered below the To section">
           </div>
         </div>
 
@@ -954,6 +1129,7 @@
       <span class="spacer"></span>
       <button class="btn btn-secondary" id="serviceReportEditBtn" style="display:none;">Edit</button>
       <button class="btn btn-secondary" id="serviceReportDownloadBtn" style="display:none;">Download PDF</button>
+      <button class="btn btn-secondary" id="serviceReportSendEmailBtn" style="display:none;">Send Email</button>
       <button class="btn btn-primary" id="serviceReportNextBtn">Next: Preview</button>
       <button class="btn btn-primary" id="serviceReportConfirmBtn" data-mutating style="display:none;">Confirm</button>
     </div>
@@ -980,7 +1156,7 @@
         </div>
         <div class="form-field">
           <label for="purchaseNo">Purchase No</label>
-          <input type="text" id="purchaseNo" required>
+          <input type="text" id="purchaseNo" required readonly>
         </div>
       </div>
 
@@ -996,7 +1172,7 @@
 
       <table class="line-items-table" id="purchaseLineItemsTable">
         <thead>
-          <tr><th class="product-col">Product</th><th>HSN</th><th class="num-col">Qty</th><th>Unit</th><th class="num-col">Cost Rate</th><th class="num-col">GST%</th><th></th></tr>
+          <tr><th class="product-col">Product</th><th class="num-col">Qty</th><th class="num-col">Cost Rate</th><th></th></tr>
         </thead>
         <tbody id="purchaseLineItemsBody"></tbody>
       </table>
@@ -1106,10 +1282,21 @@
         <h3 style="margin:0;">Terms &amp; Conditions</h3>
         <button class="btn btn-primary btn-sm" data-add-config="term">+ Add Term</button>
       </div>
-      <div class="card">
+      <div class="card" style="margin-bottom:24px;">
         <table>
           <thead><tr><th>Text</th><th>Actions</th></tr></thead>
           <tbody id="termsConfigTbody"></tbody>
+        </table>
+      </div>
+
+      <div class="panel-header">
+        <h3 style="margin:0;">Terms &amp; Conditions for AMC Quotation</h3>
+        <button class="btn btn-primary btn-sm" data-add-config="amcTerm">+ Add Term</button>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>Text</th><th>Actions</th></tr></thead>
+          <tbody id="amcTermsConfigTbody"></tbody>
         </table>
       </div>
     </div>
@@ -1238,6 +1425,10 @@
                 <label for="profLogoHeightPx">Logo Height (px)</label>
                 <input type="number" id="profLogoHeightPx" min="1" placeholder="Default ~90px">
               </div>
+              <div class="form-field">
+                <label for="profNameColor">Business Name Color</label>
+                <input type="color" id="profNameColor" value="#000000">
+              </div>
               <div class="form-field span-2">
                 <label for="profFooterText">Footer Text (PDF)</label>
                 <textarea id="profFooterText" placeholder="Shown at the bottom of every PDF page. Leave blank to default to Business Name | Address."></textarea>
@@ -1338,6 +1529,95 @@
       <button type="button" class="btn btn-secondary" data-close="tabLayoutModal">Cancel</button>
       <button type="button" class="btn btn-primary" id="saveTabLayoutBtn">Save Tab Layout</button>
     </div>
+  </div>
+</div>
+
+<!-- ===================== EMAIL TEMPLATES MODAL (opened via Settings > Email Templates, admin-only) ===================== -->
+<div class="modal-overlay" id="emailTemplatesModal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Email Templates</h3>
+      <button class="modal-close" data-close="emailTemplatesModal">&times;</button>
+    </div>
+    <form id="emailTemplatesForm">
+      <div class="modal-body">
+        <div class="checkbox-row">
+          <label><input type="checkbox" id="emailTplEnabled"> Enable Send Email button</label>
+        </div>
+        <div class="form-hint">When off, the Send Email button is hidden everywhere in the app (Invoice, Quotation, Service Report).</div>
+
+        <div class="form-grid" style="margin-top:14px;">
+          <div class="form-field span-2">
+            <label for="emailTplBusinessEmail">Business Email</label>
+            <input type="email" id="emailTplBusinessEmail" placeholder="e.g. accounts@yourbusiness.com">
+          </div>
+        </div>
+        <div class="form-hint">Stored for your own reference only — never auto-filled into any "To" field.</div>
+
+        <div class="card accordion-item">
+          <div class="accordion-header">
+            <span class="accordion-caret">&#9656;</span>
+            <span class="accordion-title">Invoice Email</span>
+          </div>
+          <div class="accordion-body" style="display:none;">
+            <div class="form-grid">
+              <div class="form-field span-2">
+                <label for="emailTplInvoiceSubject">Subject</label>
+                <input type="text" id="emailTplInvoiceSubject">
+              </div>
+              <div class="form-field span-2">
+                <label for="emailTplInvoiceBody">Body</label>
+                <textarea id="emailTplInvoiceBody"></textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card accordion-item">
+          <div class="accordion-header">
+            <span class="accordion-caret">&#9656;</span>
+            <span class="accordion-title">Quotation Email</span>
+          </div>
+          <div class="accordion-body" style="display:none;">
+            <div class="form-grid">
+              <div class="form-field span-2">
+                <label for="emailTplQuotationSubject">Subject</label>
+                <input type="text" id="emailTplQuotationSubject">
+              </div>
+              <div class="form-field span-2">
+                <label for="emailTplQuotationBody">Body</label>
+                <textarea id="emailTplQuotationBody"></textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card accordion-item">
+          <div class="accordion-header">
+            <span class="accordion-caret">&#9656;</span>
+            <span class="accordion-title">Service Report Email</span>
+          </div>
+          <div class="accordion-body" style="display:none;">
+            <div class="form-grid">
+              <div class="form-field span-2">
+                <label for="emailTplServiceReportSubject">Subject</label>
+                <input type="text" id="emailTplServiceReportSubject">
+              </div>
+              <div class="form-field span-2">
+                <label for="emailTplServiceReportBody">Body</label>
+                <textarea id="emailTplServiceReportBody"></textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-hint" style="margin-top:6px;">Fixed Subject/Body text is reused verbatim on every "Send Email" click for that document type — no placeholders, no per-document customization. The "To" recipient is always left blank; you pick it yourself each time.</div>
+      </div>
+      <div class="modal-footer">
+        <span class="spacer"></span>
+        <button type="submit" class="btn btn-primary" data-mutating>Save Email Templates</button>
+      </div>
+    </form>
   </div>
 </div>
 

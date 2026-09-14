@@ -2123,7 +2123,7 @@ function showAmcQuotationStep(step) {
   $('#amcQuotationConfirmBtn').style.display = isForm ? 'none' : '';
 }
 
-$('#btnAddAmcQuotation').addEventListener('click', () => {
+$('#btnAddAmcQuotation').addEventListener('click', () => { 
   if (!Store.getCompanies().some(c => c.isSalesCompany) || !Store.getProducts().length) {
     toast('Add at least one product and company first');
     return;

@@ -427,6 +427,20 @@ function ensureEditingRecordExists(kind, existingId, list) {
   return false;
 }
 
+/* A company with any existing Quotation (AMC included — same array), Invoice,
+   Purchase, or Service Report can't be deleted outright: doing so used to make
+   that company's entire outstanding-balance/payment history silently vanish
+   from Payments/Summary/Reports, since those views are built by iterating
+   companies first and dropping any with zero matches. Deleting the company is
+   still offered when none of these exist; otherwise the delete handler offers
+   marking it Inactive instead (see the isActive flag below). */
+function companyHasLinkedRecords(companyId) {
+  return Store.getQuotations().some(q => q.companyId === companyId)
+      || Store.getInvoices().some(i => i.companyId === companyId)
+      || Store.getPurchases().some(p => p.companyId === companyId)
+      || Store.getServiceReports().some(r => r.companyId === companyId);
+}
+
 /* =====================================================================
    Generic sortable table headers (click a <th data-sort-key> to sort)
    and filter state for the Products / Company / Purchase tab tables.
@@ -763,9 +777,10 @@ function renderCompanies() {
         <td>${escapeHtml(c.address || '')}</td>
         <td>${escapeHtml(c.gstin || '')}</td>
         <td>Net ${Number(c.paymentTermsDays) || 0} days</td>
-        <td>${companyTypeBadges(c)}</td>
+        <td>${companyTypeBadges(c)}${c.isActive === false ? ' <span class="badge badge-muted">Inactive</span>' : ''}</td>
         <td><div class="actions-cell">
           <button class="btn btn-secondary btn-sm" data-edit-company="${c.id}">Edit</button>
+          ${c.isActive === false ? `<button class="btn btn-success btn-sm" data-activate-company="${c.id}">Activate</button>` : ''}
           <button class="btn btn-danger btn-sm" data-delete-company="${c.id}">Delete</button>
         </div></td>
       </tr>
@@ -806,6 +821,10 @@ $('#saveCompanyBtn').addEventListener('click', withErrorToast(() => {
   if (blockIfViewer()) return;
   const form = $('#companyForm');
   if (!form.reportValidity()) return;
+  if (!$('#companyIsSales').checked && !$('#companyIsPurchase').checked) {
+    toast('Select at least one company type: Sales or Purchase');
+    return;
+  }
   const company = {
     id: $('#companyId').value || undefined,
     name: $('#companyName').value.trim(),
@@ -830,7 +849,24 @@ document.addEventListener('click', withErrorToast((e) => {
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
+    if (companyHasLinkedRecords(delId)) {
+      if (confirm('This company has existing Quotations, Invoices, Purchases, or Service Reports and cannot be deleted. Mark it Inactive instead?')) {
+        const c = Store.getCompanies().find(x => x.id === delId);
+        Store.saveCompany(Object.assign({}, c, { isActive: false }));
+        renderCompanies(); populateCompanyDropdowns(); populatePurchasesFilterOptions();
+        toast('Company marked Inactive');
+      }
+      return;
+    }
     if (confirm('Delete this company?')) { Store.deleteCompany(delId); renderCompanies(); populateCompanyDropdowns(); populatePurchasesFilterOptions(); toast('Company deleted'); }
+  }
+  const activateId = e.target.getAttribute && e.target.getAttribute('data-activate-company');
+  if (activateId) {
+    if (blockIfViewer()) return;
+    const c = Store.getCompanies().find(x => x.id === activateId);
+    Store.saveCompany(Object.assign({}, c, { isActive: true }));
+    renderCompanies(); populateCompanyDropdowns(); populatePurchasesFilterOptions();
+    toast('Company marked Active');
   }
 }));
 
@@ -1320,11 +1356,16 @@ $('#clearProfileBtn').addEventListener('click', withErrorToast(() => {
    already give their own pick-lists. */
 function populateCompanyDropdowns(preserveIds) {
   preserveIds = preserveIds || {};
-  const companies = Store.getCompanies();
+  const allCompanies = Store.getCompanies();
+  // Inactive companies (see the Company tab's Active/Deactivate flag) are hidden from
+  // these new-document pickers, but preserveId below still needs to find one by id —
+  // e.g. reopening an already-saved document whose company has since been deactivated —
+  // so that lookup uses the unfiltered list, not this one.
+  const companies = allCompanies.filter(c => c.isActive !== false);
   function buildSelect(selectEl, filterFn, placeholder, preserveId) {
     let opts = companies.filter(filterFn);
     if (preserveId && !opts.some(c => c.id === preserveId)) {
-      const existing = companies.find(c => c.id === preserveId);
+      const existing = allCompanies.find(c => c.id === preserveId);
       const label = existing ? `${existing.name} (not currently listed)` : '(no longer available)';
       opts = opts.concat([{ id: preserveId, name: label }]);
     }
@@ -1765,6 +1806,7 @@ function renderDocPreview(container, docData, company, docTitle, isInvoice) {
 }
 
 $('#quotationNextBtn').addEventListener('click', () => {
+  if (!ensureEditingRecordExists('quotation', $('#quotationId').value, Store.getQuotations())) return;
   if (!$('#quotationCompany').value) { toast('Select a company'); return; }
   if (!$('#quotationDate').value) { toast('Date is required'); return; }
   if (!draft.quotation.items.length) { toast('Add at least one line item'); return; }
@@ -2123,7 +2165,7 @@ function showAmcQuotationStep(step) {
   $('#amcQuotationConfirmBtn').style.display = isForm ? 'none' : '';
 }
 
-$('#btnAddAmcQuotation').addEventListener('click', () => { 
+$('#btnAddAmcQuotation').addEventListener('click', () => {
   if (!Store.getCompanies().some(c => c.isSalesCompany) || !Store.getProducts().length) {
     toast('Add at least one product and company first');
     return;
@@ -2255,6 +2297,7 @@ function renderAmcQuotationPreview(container, docData, company) {
 }
 
 $('#amcQuotationNextBtn').addEventListener('click', () => {
+  if (!ensureEditingRecordExists('amcQuotation', $('#amcQuotationId').value, Store.getQuotations())) return;
   if (!$('#amcQuotationCompany').value) { toast('Select a company'); return; }
   if (!$('#amcQuotationDate').value) { toast('Date is required'); return; }
   if (!draft.amcQuotation.items.length) { toast('Add at least one line item'); return; }
@@ -2552,7 +2595,26 @@ $('#invoiceConfirmBtn').addEventListener('click', withErrorToast(async () => {
     }
   } else {
     const existing = Store.getInvoices().find(i => i.id === docData.id);
-    docData.payment = existing.payment;
+    if (Store.getInvoices().some(i => i.id !== docData.id && i.invoiceNo === docData.invoiceNo)) {
+      toast(`Invoice No "${docData.invoiceNo}" is already used by another invoice.`);
+      return;
+    }
+    if (docData.challanNo && Store.getInvoices().some(i => i.id !== docData.id && i.challanNo === docData.challanNo)) {
+      toast(`Challan No "${docData.challanNo}" is already used by another invoice.`);
+      return;
+    }
+    // Preserve the recorded amountReceived/paymentDate/received exactly as they
+    // are, but recompute the derived shortfall against this edit's (possibly
+    // changed) total — otherwise a stale shortfallAmount from before the edit
+    // lingers and disagrees with the invoice's own new balance.
+    const payment = Object.assign({}, existing.payment);
+    if (payment.received) {
+      const amountReceived = Number(payment.amountReceived) || 0;
+      const shortfall = docData.total - amountReceived;
+      payment.shortfallAmount = shortfall > 0.009 ? shortfall : 0;
+      payment.shortfallType = shortfall > 0.009 ? (payment.shortfallType || 'pending') : null;
+    }
+    docData.payment = payment;
   }
   Store.saveInvoice(docData);
   closeModal('invoiceModal');
@@ -2791,6 +2853,7 @@ function maybeAutoFillServiceReportParagraph() {
   $('#' + id).addEventListener('change', maybeAutoFillServiceReportParagraph));
 
 $('#serviceReportResetParagraphBtn').addEventListener('click', () => {
+  if (!confirm('Reset the paragraph to the template? This will discard your current text.')) return;
   $('#serviceReportParagraph').value = serviceReportParagraphTemplate();
   serviceReportParagraphAutoFilled = true;
 });
@@ -3702,19 +3765,32 @@ $('#paymentAmountReceived').addEventListener('input', () => {
 $('#savePaymentBtn').addEventListener('click', withErrorToast(() => {
   if (blockIfViewer()) return;
   const invoiceId = $('#paymentInvoiceId').value;
-  const inv = Store.getInvoices().find(i => i.id === invoiceId);
+  // Clone before mutating — Store.getInvoices() can hand back a live reference
+  // into the Supabase backend's shared cache (supabaseData/syncedSupabaseData
+  // alias the same objects), and mutating that shared object in place here
+  // silently corrupts the "last confirmed synced" baseline too, making this
+  // change invisible to the next sync diff and dropping it before it ever
+  // reaches the server. Every other Save handler in this app already avoids
+  // this by building a fresh object instead of mutating a fetched one.
+  const original = Store.getInvoices().find(i => i.id === invoiceId);
+  const inv = original ? Object.assign({}, original) : original;
   const amountReceived = Number($('#paymentAmountReceived').value);
   const paymentDate = $('#paymentDate').value;
-  if (!paymentDate || isNaN(amountReceived)) { toast('Amount received and payment date are required'); return; }
-  const shortfall = inv.total - amountReceived;
-  const payment = {
-    received: true,
-    amountReceived,
-    paymentDate,
-    shortfallType: shortfall > 0.009 ? $('#paymentShortfallType').value : null,
-    shortfallAmount: shortfall > 0.009 ? shortfall : 0,
-  };
-  inv.payment = payment;
+  if (!paymentDate || isNaN(amountReceived) || amountReceived < 0) { toast('Amount received must be a valid, non-negative number'); return; }
+  if (amountReceived > inv.total + 0.009) { toast(`Amount received cannot exceed the invoice total of ${fmt(inv.total)}`); return; }
+  if (amountReceived === 0) {
+    // Recording a ₹0 payment is treated as un-recording any payment at all.
+    inv.payment = { received: false, amountReceived: null, paymentDate: null, shortfallType: null, shortfallAmount: 0 };
+  } else {
+    const shortfall = inv.total - amountReceived;
+    inv.payment = {
+      received: true,
+      amountReceived,
+      paymentDate,
+      shortfallType: shortfall > 0.009 ? $('#paymentShortfallType').value : null,
+      shortfallAmount: shortfall > 0.009 ? shortfall : 0,
+    };
+  }
   Store.saveInvoice(inv);
   closeModal('paymentModal');
   renderInvoices();
@@ -4452,7 +4528,7 @@ function expenseExportRow(e) {
  * live formula Excel may execute on open. Prefixing with a straight quote is
  * Excel's own "treat as text" escape and doesn't change how the value displays. */
 function sanitizeForExcel(value) {
-  return (typeof value === 'string' && /^[=+\-@]/.test(value)) ? `'${value}` : value;
+  return (typeof value === 'string' && /^[=+\-@\t\r]/.test(value)) ? `'${value}` : value;
 }
 
 function downloadWorkbook(sheets, filename) {

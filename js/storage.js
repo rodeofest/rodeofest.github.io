@@ -133,7 +133,7 @@ const Store = {
     const list = readList(STORAGE_KEYS.products);
     if (product.id) {
       const idx = list.findIndex(p => p.id === product.id);
-      if (idx >= 0) { list[idx] = product; }
+      if (idx >= 0) { list[idx] = Object.assign({}, list[idx], product); }
     } else {
       product.id = uid();
       list.push(product);
@@ -152,7 +152,7 @@ const Store = {
     const list = readList(STORAGE_KEYS.companies);
     if (company.id) {
       const idx = list.findIndex(c => c.id === company.id);
-      if (idx >= 0) { list[idx] = company; }
+      if (idx >= 0) { list[idx] = Object.assign({}, list[idx], company); }
     } else {
       company.id = uid();
       list.push(company);
@@ -213,7 +213,7 @@ const Store = {
     const list = readList(STORAGE_KEYS.quotations);
     if (q.id) {
       const idx = list.findIndex(x => x.id === q.id);
-      if (idx >= 0) { list[idx] = q; }
+      if (idx >= 0) { list[idx] = Object.assign({}, list[idx], q); }
     } else {
       q.id = uid();
       q.createdAt = new Date().toISOString();
@@ -233,7 +233,7 @@ const Store = {
     const list = readList(STORAGE_KEYS.invoices);
     if (inv.id) {
       const idx = list.findIndex(x => x.id === inv.id);
-      if (idx >= 0) { list[idx] = inv; }
+      if (idx >= 0) { list[idx] = Object.assign({}, list[idx], inv); }
     } else {
       inv.id = uid();
       inv.createdAt = new Date().toISOString();
@@ -253,7 +253,7 @@ const Store = {
     const list = readList(STORAGE_KEYS.serviceReports);
     if (report.id) {
       const idx = list.findIndex(x => x.id === report.id);
-      if (idx >= 0) { list[idx] = report; }
+      if (idx >= 0) { list[idx] = Object.assign({}, list[idx], report); }
     } else {
       report.id = uid();
       report.createdAt = new Date().toISOString();
@@ -273,7 +273,7 @@ const Store = {
     const list = readList(STORAGE_KEYS.purchases);
     if (p.id) {
       const idx = list.findIndex(x => x.id === p.id);
-      if (idx >= 0) { list[idx] = p; }
+      if (idx >= 0) { list[idx] = Object.assign({}, list[idx], p); }
     } else {
       p.id = uid();
       p.createdAt = new Date().toISOString();
@@ -293,7 +293,7 @@ const Store = {
     const list = readList(STORAGE_KEYS.expenses);
     if (e.id) {
       const idx = list.findIndex(x => x.id === e.id);
-      if (idx >= 0) { list[idx] = e; }
+      if (idx >= 0) { list[idx] = Object.assign({}, list[idx], e); }
     } else {
       e.id = uid();
       e.createdAt = new Date().toISOString();
@@ -973,6 +973,13 @@ function notifyConnectivityChanged() {
 }
 
 function scheduleSupabasePersist(key, oldList, newList) {
+  // Mark in-flight immediately, not only on failure — closes the window where
+  // Store.refreshSupabaseKeys (called on every tab switch) could refetch and
+  // momentarily overwrite this write's optimistic local update before it lands.
+  // persistKeyToSupabase already deletes the key on success and leaves it for
+  // retry on failure, unchanged.
+  pendingRetryKeys.add(key);
+  notifyConnectivityChanged();
   supabaseWriteQueue = supabaseWriteQueue.then(() => persistKeyToSupabase(key, oldList, newList));
 }
 
@@ -1181,7 +1188,12 @@ Store.activateSupabaseBackend = async function activateSupabaseBackend(reconcile
   // state right now — seed the sync baseline to match so the very next write
   // diffs against reality instead of an empty baseline (which would otherwise
   // treat every existing record as a fresh upsert on the first write).
-  syncedSupabaseData = Object.assign({}, map);
+  // Deep-cloned, not Object.assign'd — Object.assign is shallow, so each key's
+  // array/object would still be the literal same reference as supabaseData's,
+  // and a later in-place mutation of a fetched record (Store.getX().find(...))
+  // would corrupt this "confirmed synced" baseline too, silently hiding a real
+  // change from the next sync diff before it ever reaches the server.
+  syncedSupabaseData = JSON.parse(JSON.stringify(map));
   pendingRetryKeys.clear();
   dataBackendMode = 'supabase';
   updateDataFileIndicatorVisibility();
@@ -1207,7 +1219,14 @@ Store.refreshSupabaseKeys = async function refreshSupabaseKeys(keys) {
   if (!keysToFetch.length) return;
   const map = await fetchSupabaseKeysBatch(keysToFetch);
   Object.assign(supabaseData, map);
-  Object.assign(syncedSupabaseData, map);
+  // Deep-clone before assigning to syncedSupabaseData — see the identical note
+  // in Store.activateSupabaseBackend. This is exactly the bug that made
+  // recorded Payments silently vanish: #savePaymentBtn used to mutate a record
+  // obtained via Store.getInvoices().find(...) in place, which — because this
+  // line used to alias supabaseData's arrays directly — also mutated the
+  // "confirmed synced" baseline, making the change invisible to the next sync
+  // diff (diffListsById) and dropping it before it ever reached Supabase.
+  Object.assign(syncedSupabaseData, JSON.parse(JSON.stringify(map)));
 };
 
 Store.deactivateSupabaseBackend = async function deactivateSupabaseBackend() {

@@ -90,37 +90,23 @@ function getNextPurchaseNo() {
   return `${prefix}${pad3(maxSeq + 1)}`;
 }
 
-/**
- * Challan numbering: increment from the last invoice's challan number.
- * If the last invoice has none, walk backward through prior invoices until one is found.
- * If none exist at all, start fresh at CH/{FY}/001.
- */
+/** Next Challan number for the current FY — same "scan for highest existing" pattern
+ * as getNextInvoiceNo, rather than incrementing from whichever invoice was most
+ * recently created (which could ignore a higher challan number set on an older
+ * invoice). A custom, non-default-prefix challan number stays fully user-editable
+ * but no longer influences this auto-suggestion — it always proposes the next
+ * default CH/{FY}/nnn. */
 function getNextChallanNo() {
   const fy = currentFinancialYear();
-  const invoices = Store.getInvoices()
-    .slice()
-    .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
-
-  for (let i = invoices.length - 1; i >= 0; i--) {
-    const ch = invoices[i].challanNo;
-    if (ch) {
-      const seq = extractSeq(ch);
-      if (seq !== null) {
-        const prefix = ch.replace(/\d+\s*$/, '');
-        // Default-format challans (CH/{FY}/nnn) should reset to 001 once the
-        // financial year rolls over, same as every other numbering scheme —
-        // otherwise the sequence (and the now-stale FY tag) would just keep
-        // incrementing forever. A custom, non-default prefix is left alone and
-        // simply incremented, exactly as before.
-        const fyMatch = prefix.match(/^CH\/(\d{4}-\d{2})\/$/);
-        if (fyMatch && fyMatch[1] !== fy) {
-          return `CH/${fy}/001`;
-        }
-        return `${prefix}${pad3(seq + 1)}`;
-      }
+  const prefix = `CH/${fy}/`;
+  let maxSeq = 0;
+  Store.getInvoices().forEach(inv => {
+    if (inv.challanNo && inv.challanNo.startsWith(prefix)) {
+      const seq = extractSeq(inv.challanNo);
+      if (seq !== null && seq > maxSeq) maxSeq = seq;
     }
-  }
-  return `CH/${fy}/001`;
+  });
+  return `${prefix}${pad3(maxSeq + 1)}`;
 }
 
 /** Next Service Report number for the current FY — same "scan for highest existing" pattern as getNextInvoiceNo. */

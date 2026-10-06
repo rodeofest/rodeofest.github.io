@@ -246,6 +246,11 @@
   </div>
 
   <div class="panel-header" style="margin-top:28px;">
+    <h3 style="margin:0;">Products Possibly Missing Purchase Entries</h3>
+  </div>
+  <div id="missingPurchaseEntries"></div>
+
+  <div class="panel-header" style="margin-top:28px;">
     <h2>Cash / Manual Expenses</h2>
     <button class="btn btn-primary" id="btnAddExpense">+ Add Expense</button>
   </div>
@@ -682,6 +687,11 @@
           <div class="form-field">
             <label for="productGst">GST %</label>
             <select id="productGst" required></select>
+          </div>
+          <div class="form-field span-2">
+            <div class="checkbox-row">
+              <label><input type="checkbox" id="productExcludePurchaseCheck"> This product doesn't need a Purchase entry (exclude from "Missing Purchase Entries" check)</label>
+            </div>
           </div>
         </div>
       </form>
@@ -1178,6 +1188,10 @@
       </table>
 
       <div class="totals-box" id="purchaseTotalsBox"></div>
+
+      <div class="checkbox-row" style="margin-top:10px;">
+        <label><input type="checkbox" id="purchaseNoGst"> No GST (this purchase has no GST component — Total will equal Subtotal)</label>
+      </div>
 
       <div class="form-grid" style="margin-top:14px;">
         <div class="form-field">

@@ -156,7 +156,7 @@ const TAB_LAZY_KEYS = {
      actually be requested via activateTab(). Expenses is folded into the
      purchases entry instead, so opening/returning to the Purchase tab refreshes
      both sections' data together. */
-  purchases: [STORAGE_KEYS.purchases, STORAGE_KEYS.companies, STORAGE_KEYS.expenses],
+  purchases: [STORAGE_KEYS.purchases, STORAGE_KEYS.companies, STORAGE_KEYS.expenses, STORAGE_KEYS.invoices, STORAGE_KEYS.products],
   summary: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
   pnl: [STORAGE_KEYS.invoices, STORAGE_KEYS.purchases, STORAGE_KEYS.expenses],
   gst: [STORAGE_KEYS.invoices, STORAGE_KEYS.purchases],
@@ -227,7 +227,7 @@ async function activateTab(tabId) {
   if (tabId === 'invoices') renderInvoices();
   if (tabId === 'payments') renderPayments();
   if (tabId === 'serviceReports') renderServiceReports();
-  if (tabId === 'purchases') { renderPurchases(); renderExpenses(); }
+  if (tabId === 'purchases') { renderPurchases(); renderExpenses(); renderMissingPurchaseEntries(); }
   if (tabId === 'summary') renderSummary();
   if (tabId === 'pnl') renderProfitLoss();
   if (tabId === 'gst') renderGstPayment();
@@ -693,6 +693,7 @@ function openProductModal(product) {
   $('#productRate').value = product ? product.rate : '';
   const defaultGstRate = Store.getGstRates().find(r => r.value === 18) || Store.getGstRates()[0];
   populateGstRateOptions($('#productGst'), product ? product.gstPercent : (defaultGstRate ? defaultGstRate.value : undefined));
+  $('#productExcludePurchaseCheck').checked = product ? !!product.excludeFromPurchaseCheck : false;
   openModal('productModal');
 }
 
@@ -717,6 +718,7 @@ $('#saveProductBtn').addEventListener('click', withErrorToast(() => {
     unit: $('#productUnit').value.trim(),
     rate: Number($('#productRate').value),
     gstPercent: Number($('#productGst').value),
+    excludeFromPurchaseCheck: $('#productExcludePurchaseCheck').checked,
   };
   Store.saveProduct(product);
   closeModal('productModal');
@@ -1486,10 +1488,17 @@ function currentInterState(kind) {
 $('#quotationCompany').addEventListener('change', () => renderTotalsBox('quotation'));
 $('#invoiceCompany').addEventListener('change', () => renderTotalsBox('invoice'));
 $('#purchaseCompany').addEventListener('change', () => renderTotalsBox('purchase'));
+$('#purchaseNoGst').addEventListener('change', () => renderTotalsBox('purchase'));
 
 function renderTotalsBox(kind) {
   const interState = currentInterState(kind);
   const totals = computeTotals(draft[kind].items, interState);
+  if (kind === 'purchase' && $('#purchaseNoGst').checked) {
+    totals.cgst = 0;
+    totals.sgst = 0;
+    totals.igst = 0;
+    totals.total = totals.subtotal;
+  }
   draft[kind].totals = totals;
   const box = $('#' + kind + 'TotalsBox');
   const rows = [];
@@ -2621,6 +2630,7 @@ $('#invoiceConfirmBtn').addEventListener('click', withErrorToast(async () => {
   renderInvoices();
   renderPayments();
   renderSalesByCompany();
+  renderMissingPurchaseEntries();
   toast('Invoice saved');
 }));
 
@@ -2670,7 +2680,7 @@ document.addEventListener('click', withErrorToast((e) => {
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
-    if (confirm('Delete this invoice?')) { Store.deleteInvoice(delId); renderInvoices(); renderPayments(); renderSalesByCompany(); toast('Invoice deleted'); }
+    if (confirm('Delete this invoice?')) { Store.deleteInvoice(delId); renderInvoices(); renderPayments(); renderSalesByCompany(); renderMissingPurchaseEntries(); toast('Invoice deleted'); }
   }
 }));
 
@@ -3159,6 +3169,104 @@ function purchaseRow(p) {
     </tr>`;
 }
 
+/** Per-product qty sold, from real (non-Proforma) invoices only, with per-invoice drill-down rows. */
+function computeProductSoldDetail() {
+  const map = new Map(); // productId -> { name, qty, rows: [{invoiceNo, date, qty}] }
+  realInvoices().forEach(inv => {
+    (inv.items || []).forEach(item => {
+      if (!item.productId) return;
+      const entry = map.get(item.productId) || { name: item.name, qty: 0, rows: [] };
+      const qty = Number(item.qty) || 0;
+      entry.qty += qty;
+      entry.rows.push({ invoiceNo: inv.invoiceNo, date: inv.date, qty });
+      map.set(item.productId, entry);
+    });
+  });
+  return map;
+}
+
+/** Per-product qty purchased, from Purchase line items (any GST%, including a no-GST
+ * purchase via the noGst flag), with per-purchase drill-down rows. Mirrors
+ * computeProductSoldDetail. */
+function computeProductPurchasedDetail() {
+  const map = new Map(); // productId -> { qty, rows: [{purchaseNo, date, qty}] }
+  Store.getPurchases().forEach(p => {
+    (p.items || []).forEach(item => {
+      if (!item.productId) return;
+      const entry = map.get(item.productId) || { qty: 0, rows: [] };
+      const qty = Number(item.qty) || 0;
+      entry.qty += qty;
+      entry.rows.push({ purchaseNo: p.purchaseNo, date: p.date, qty });
+      map.set(item.productId, entry);
+    });
+  });
+  return map;
+}
+
+/** Products whose sold qty exceeds purchased qty, excluding opted-out products
+ * (Product.excludeFromPurchaseCheck). Computed fresh at render time — no stored
+ * aggregate, matching every other report in this app. */
+function computeMissingPurchaseEntries() {
+  const sold = computeProductSoldDetail();
+  const purchased = computeProductPurchasedDetail();
+  const products = Store.getProducts();
+  const result = [];
+  sold.forEach((soldEntry, productId) => {
+    const product = products.find(p => p.id === productId);
+    if (product && product.excludeFromPurchaseCheck) return;
+    const purchasedEntry = purchased.get(productId) || { qty: 0, rows: [] };
+    const shortfall = soldEntry.qty - purchasedEntry.qty;
+    if (shortfall <= 0.009) return;
+    result.push({
+      productName: product ? product.name : soldEntry.name,
+      soldQty: soldEntry.qty,
+      purchasedQty: purchasedEntry.qty,
+      shortfall: Math.round(shortfall * 100) / 100,
+      soldRows: soldEntry.rows,
+      purchasedRows: purchasedEntry.rows,
+    });
+  });
+  return result.sort((a, b) => b.shortfall - a.shortfall);
+}
+
+function renderMissingPurchaseEntries() {
+  const container = $('#missingPurchaseEntries');
+  const rows = computeMissingPurchaseEntries();
+  if (!rows.length) {
+    container.innerHTML = `<div class="card" style="padding:20px; text-align:center; color:var(--text-muted);">No products currently show a purchase shortfall.</div>`;
+    return;
+  }
+  container.innerHTML = `
+    <div class="card">
+      <table>
+        <thead><tr><th>Product</th><th>Qty Sold</th><th>Qty Purchased</th><th>Shortfall</th><th>Details</th></tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td>${escapeHtml(r.productName)}</td>
+              <td>${r.soldQty}</td>
+              <td>${r.purchasedQty}</td>
+              <td><span class="badge badge-warning">${r.shortfall}</span></td>
+              <td><details>
+                <summary>View Invoices / Purchases</summary>
+                <strong>Sold in Invoices</strong>
+                <table class="diff-table">
+                  <thead><tr><th>Invoice No</th><th>Date</th><th>Qty</th></tr></thead>
+                  <tbody>${r.soldRows.map(x => `<tr><td>${escapeHtml(x.invoiceNo || '')}</td><td>${fmtDateShort(x.date)}</td><td>${x.qty}</td></tr>`).join('')}</tbody>
+                </table>
+                <strong>Purchased via</strong>
+                ${r.purchasedRows.length ? `
+                <table class="diff-table">
+                  <thead><tr><th>Purchase No</th><th>Date</th><th>Qty</th></tr></thead>
+                  <tbody>${r.purchasedRows.map(x => `<tr><td>${escapeHtml(x.purchaseNo || '')}</td><td>${fmtDateShort(x.date)}</td><td>${x.qty}</td></tr>`).join('')}</tbody>
+                </table>` : `<div style="color:var(--text-muted);">No purchase entries at all for this product.</div>`}
+              </details></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
 function renderPurchasesByCompany() {
   const container = $('#purchasesByCompany');
   const purchases = Store.getPurchases();
@@ -3305,6 +3413,7 @@ function resetPurchaseModal() {
   $('#purchaseNo').value = getNextPurchaseNo();
   $('#purchasePaymentDone').checked = false;
   $('#purchasePaymentNote').value = '';
+  $('#purchaseNoGst').checked = false;
   populateProductPicker($('#purchaseProductPicker'));
   renderLineItems('purchase');
 }
@@ -3336,6 +3445,7 @@ $('#savePurchaseBtn').addEventListener('click', withErrorToast(async () => {
     purchaseNo: $('#purchaseNo').value.trim(),
     paymentDone: $('#purchasePaymentDone').checked,
     paymentNote: $('#purchasePaymentNote').value.trim(),
+    noGst: $('#purchaseNoGst').checked,
   });
   if (isNew) {
     docData.purchaseNo = await guardAgainstNumberCollision(
@@ -3348,6 +3458,7 @@ $('#savePurchaseBtn').addEventListener('click', withErrorToast(async () => {
   closeModal('purchaseModal');
   renderPurchases();
   renderPurchasesByCompany();
+  renderMissingPurchaseEntries();
   toast('Purchase saved');
 }));
 
@@ -3362,6 +3473,7 @@ document.addEventListener('click', withErrorToast((e) => {
     $('#purchaseNo').value = p.purchaseNo;
     $('#purchasePaymentDone').checked = !!p.paymentDone;
     $('#purchasePaymentNote').value = p.paymentNote || '';
+    $('#purchaseNoGst').checked = !!p.noGst;
     populateProductPicker($('#purchaseProductPicker'));
     populateCompanyDropdowns({ purchase: p.companyId });
     $('#purchaseCompany').value = p.companyId;
@@ -3372,7 +3484,7 @@ document.addEventListener('click', withErrorToast((e) => {
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
-    if (confirm('Delete this purchase?')) { Store.deletePurchase(delId); renderPurchases(); renderPurchasesByCompany(); toast('Purchase deleted'); }
+    if (confirm('Delete this purchase?')) { Store.deletePurchase(delId); renderPurchases(); renderPurchasesByCompany(); renderMissingPurchaseEntries(); toast('Purchase deleted'); }
   }
 }));
 

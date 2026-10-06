@@ -553,6 +553,15 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
 .diff-table { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 12.5px; }
 .diff-table th, .diff-table td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
 
+/* Missing Purchase Entries: the generic `table { width:100% }` rule otherwise
+   lets a long product name (or a nested .diff-table's doc number) wrap
+   word-by-word inside that 100% cap instead of widening the table — unlike
+   every other wide table in this app, which never needs to wrap because
+   nothing forces a reflow before .card's overflow-x kicks in. Keeping every
+   cell in this section's tables on one line forces the same scroll-not-wrap
+   behavior here too. */
+#missingPurchaseEntries td, #missingPurchaseEntries th { white-space: nowrap; }
+
 .tab-layout-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
 .tab-layout-table th, .tab-layout-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; font-size: 13px; }
 .tab-layout-table .btn-icon { border: 1px solid var(--border); background: var(--card-bg); border-radius: 4px; width: 24px; height: 22px; cursor: pointer; font-size: 11px; line-height: 1; }

@@ -172,6 +172,7 @@ body {
 .btn-success:hover { background: #d3f0e1; }
 .btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 5px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.icon-trash { width: 14px; height: 14px; vertical-align: -2px; }
 
 /* ---- View-only role and delete-restriction: visual affordance only; the
    real blocks are in js/app.js's blockIfViewer()/blockDeleteIfNotAdmin()

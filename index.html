@@ -8,6 +8,15 @@
 </head>
 <body>
 
+<svg style="display:none" aria-hidden="true">
+  <symbol id="icon-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="3 6 5 6 21 6"></polyline>
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+    <line x1="10" y1="11" x2="10" y2="17"></line>
+    <line x1="14" y1="11" x2="14" y2="17"></line>
+  </symbol>
+</svg>
+
 <div class="file-gate-overlay" id="fileGateOverlay">
   <div class="file-gate-card">
     <h2 id="fileGateTitle">Connect Your Data Folder</h2>
@@ -823,8 +832,7 @@
       <button class="btn btn-secondary" data-close="quotationModal">Cancel</button>
       <span class="spacer"></span>
       <button class="btn btn-secondary" id="quotationEditBtn" style="display:none;">Edit</button>
-      <button class="btn btn-secondary" id="quotationDownloadBtn" style="display:none;">Download PDF</button>
-      <button class="btn btn-secondary" id="quotationSendEmailBtn" style="display:none;">Send Email</button>
+      <button class="btn btn-secondary" id="quotationDownloadBtn" style="display:none;">PDF</button>
       <button class="btn btn-primary" id="quotationNextBtn">Next: Preview</button>
       <button class="btn btn-primary" id="quotationConfirmBtn" data-mutating style="display:none;">Confirm</button>
     </div>
@@ -935,7 +943,7 @@
       <button class="btn btn-secondary" data-close="amcQuotationModal">Cancel</button>
       <span class="spacer"></span>
       <button class="btn btn-secondary" id="amcQuotationEditBtn" style="display:none;">Edit</button>
-      <button class="btn btn-secondary" id="amcQuotationDownloadBtn" style="display:none;">Download PDF</button>
+      <button class="btn btn-secondary" id="amcQuotationDownloadBtn" style="display:none;">PDF</button>
       <button class="btn btn-primary" id="amcQuotationNextBtn">Next: Preview</button>
       <button class="btn btn-primary" id="amcQuotationConfirmBtn" data-mutating style="display:none;">Confirm</button>
     </div>
@@ -1043,8 +1051,7 @@
       <button class="btn btn-secondary" data-close="invoiceModal">Cancel</button>
       <span class="spacer"></span>
       <button class="btn btn-secondary" id="invoiceEditBtn" style="display:none;">Edit</button>
-      <button class="btn btn-secondary" id="invoiceDownloadBtn" style="display:none;">Download PDF</button>
-      <button class="btn btn-secondary" id="invoiceSendEmailBtn" style="display:none;">Send Email</button>
+      <button class="btn btn-secondary" id="invoiceDownloadBtn" style="display:none;">PDF</button>
       <button class="btn btn-primary" id="invoiceNextBtn">Next: Preview</button>
       <button class="btn btn-primary" id="invoiceConfirmBtn" data-mutating style="display:none;">Confirm</button>
     </div>
@@ -1138,8 +1145,7 @@
       <button class="btn btn-secondary" data-close="serviceReportModal">Cancel</button>
       <span class="spacer"></span>
       <button class="btn btn-secondary" id="serviceReportEditBtn" style="display:none;">Edit</button>
-      <button class="btn btn-secondary" id="serviceReportDownloadBtn" style="display:none;">Download PDF</button>
-      <button class="btn btn-secondary" id="serviceReportSendEmailBtn" style="display:none;">Send Email</button>
+      <button class="btn btn-secondary" id="serviceReportDownloadBtn" style="display:none;">PDF</button>
       <button class="btn btn-primary" id="serviceReportNextBtn">Next: Preview</button>
       <button class="btn btn-primary" id="serviceReportConfirmBtn" data-mutating style="display:none;">Confirm</button>
     </div>

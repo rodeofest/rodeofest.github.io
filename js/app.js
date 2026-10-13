@@ -23,6 +23,10 @@ function blockDeleteIfNotAdmin() {
   return false;
 }
 
+function canDelete() {
+  return !!(currentUser && currentUser.isAdmin);
+}
+
 function todayISO() {
   // Not new Date().toISOString().slice(0,10) — that converts to UTC first, which
   // can show yesterday's or tomorrow's date depending on the local timezone
@@ -631,7 +635,7 @@ function renderProducts() {
         <td>${p.gstPercent}%</td>
         <td><div class="actions-cell">
           <button class="btn btn-secondary btn-sm" data-edit-product="${p.id}">Edit</button>
-          <button class="btn btn-danger btn-sm" data-delete-product="${p.id}">Delete</button>
+          ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-product="${p.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
         </div></td>
       </tr>
     `).join('');
@@ -783,7 +787,7 @@ function renderCompanies() {
         <td><div class="actions-cell">
           <button class="btn btn-secondary btn-sm" data-edit-company="${c.id}">Edit</button>
           ${c.isActive === false ? `<button class="btn btn-success btn-sm" data-activate-company="${c.id}">Activate</button>` : ''}
-          <button class="btn btn-danger btn-sm" data-delete-company="${c.id}">Delete</button>
+          ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-company="${c.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
         </div></td>
       </tr>
     `).join('');
@@ -1168,7 +1172,7 @@ async function renderUserConfigTable() {
           <button class="btn btn-secondary btn-sm" data-reset-user="${escapeHtml(p.username)}">Reset Password</button>
           <button class="btn btn-secondary btn-sm" data-toggle-admin-user="${escapeHtml(p.username)}" data-current-admin="${p.isAdmin}">${p.isAdmin ? 'Revoke Admin' : 'Make Admin'}</button>
           <button class="btn btn-secondary btn-sm" data-toggle-viewer-user="${escapeHtml(p.username)}" data-current-viewer="${p.isViewer}">${p.isViewer ? 'Remove Viewer' : 'Make Viewer'}</button>
-          <button class="btn btn-danger btn-sm" data-delete-user="${escapeHtml(p.username)}">Delete</button>
+          ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-user="${escapeHtml(p.username)}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
         </div></td>
       </tr>
     `).join('');
@@ -1539,9 +1543,10 @@ function renderQuotations() {
       <td>${escapeHtml(q._companyName)}</td>
       <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-quotation="${q.id}">Edit</button>
-        <button class="btn btn-secondary btn-sm" data-pdf-quotation="${q.id}">Download PDF</button>
-        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-quotation="${q.id}">Send Email</button>` : ''}
-        <button class="btn btn-danger btn-sm" data-delete-quotation="${q.id}">Delete</button>
+        <button class="btn btn-secondary btn-sm" data-duplicate-quotation="${q.id}">Duplicate</button>
+        <button class="btn btn-secondary btn-sm" data-pdf-quotation="${q.id}">PDF</button>
+        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-quotation="${q.id}">Email</button>` : ''}
+        ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-quotation="${q.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
       </div></td>
     </tr>
   `).join('');
@@ -1637,7 +1642,6 @@ function showQuotationStep(step) {
   $('#quotationNextBtn').style.display = isForm ? '' : 'none';
   $('#quotationEditBtn').style.display = isForm ? 'none' : '';
   $('#quotationDownloadBtn').style.display = isForm ? 'none' : '';
-  $('#quotationSendEmailBtn').style.display = (isForm || !Store.getEmailTemplates().enabled) ? 'none' : '';
   $('#quotationConfirmBtn').style.display = isForm ? 'none' : '';
 }
 
@@ -1844,12 +1848,6 @@ $('#quotationDownloadBtn').addEventListener('click', () => {
   doc.save(`${docData.quotationNo.replace(/\//g, '-')}.pdf`);
 });
 
-$('#quotationSendEmailBtn').addEventListener('click', withErrorToast(() => {
-  const [docData, company] = getQuotationDraftDoc();
-  const doc = buildQuotationPdf(docData, company, Store.getProfile());
-  return sendDocumentEmail('quotation', `${docData.quotationNo.replace(/\//g, '-')}.pdf`, doc);
-}));
-
 $('#quotationConfirmBtn').addEventListener('click', withErrorToast(async () => {
   if (blockIfViewer()) return;
   const isNew = !$('#quotationId').value;
@@ -1874,6 +1872,25 @@ document.addEventListener('click', withErrorToast((e) => {
     const q = Store.getQuotations().find(x => x.id === editId);
     draft.quotation = { items: JSON.parse(JSON.stringify(q.items)), terms: JSON.parse(JSON.stringify(q.terms || [])) };
     $('#quotationId').value = q.id;
+    $('#quotationDate').value = q.date;
+    populateProductPicker($('#quotationProductPicker'));
+    populateCompanyDropdowns({ quotation: q.companyId });
+    $('#quotationCompany').value = q.companyId;
+    const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true, showAmount: false }, q.displayOptions || {});
+    $('#quotationShowSubtotal').checked = opts.showSubtotal;
+    $('#quotationShowTax').checked = opts.showTax;
+    $('#quotationShowGrandTotal').checked = opts.showGrandTotal;
+    $('#quotationShowAmount').checked = opts.showAmount;
+    renderLineItems('quotation');
+    renderQuotationTerms();
+    showQuotationStep('form');
+    openModal('quotationModal');
+  }
+  const duplicateId = e.target.getAttribute && e.target.getAttribute('data-duplicate-quotation');
+  if (duplicateId) {
+    const q = Store.getQuotations().find(x => x.id === duplicateId);
+    draft.quotation = { items: JSON.parse(JSON.stringify(q.items)), terms: JSON.parse(JSON.stringify(q.terms || [])) };
+    $('#quotationId').value = ''; // blank id: saves as a brand-new record, with a fresh QTN- number
     $('#quotationDate').value = q.date;
     populateProductPicker($('#quotationProductPicker'));
     populateCompanyDropdowns({ quotation: q.companyId });
@@ -1957,8 +1974,8 @@ function renderAmcQuotations() {
       <td>${escapeHtml(q._companyName)}</td>
       <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-amcQuotation="${q.id}">Edit</button>
-        <button class="btn btn-secondary btn-sm" data-pdf-amcQuotation="${q.id}">Download PDF</button>
-        <button class="btn btn-danger btn-sm" data-delete-amcQuotation="${q.id}">Delete</button>
+        <button class="btn btn-secondary btn-sm" data-pdf-amcQuotation="${q.id}">PDF</button>
+        ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-amcQuotation="${q.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
       </div></td>
     </tr>
   `).join('');
@@ -2423,9 +2440,10 @@ function renderInvoices() {
       <td>${paymentStatusBadge(inv)}</td>
       <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-invoice="${inv.id}">Edit</button>
-        <button class="btn btn-secondary btn-sm" data-pdf-invoice="${inv.id}">Download PDF</button>
-        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-invoice="${inv.id}">Send Email</button>` : ''}
-        <button class="btn btn-danger btn-sm" data-delete-invoice="${inv.id}">Delete</button>
+        <button class="btn btn-secondary btn-sm" data-duplicate-invoice="${inv.id}">Duplicate</button>
+        <button class="btn btn-secondary btn-sm" data-pdf-invoice="${inv.id}">PDF</button>
+        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-invoice="${inv.id}">Email</button>` : ''}
+        ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-invoice="${inv.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
       </div></td>
     </tr>
   `).join('');
@@ -2505,7 +2523,6 @@ function showInvoiceStep(step) {
   $('#invoiceNextBtn').style.display = isForm ? '' : 'none';
   $('#invoiceEditBtn').style.display = isForm ? 'none' : '';
   $('#invoiceDownloadBtn').style.display = isForm ? 'none' : '';
-  $('#invoiceSendEmailBtn').style.display = (isForm || !Store.getEmailTemplates().enabled) ? 'none' : '';
   $('#invoiceConfirmBtn').style.display = isForm ? 'none' : '';
 }
 
@@ -2563,13 +2580,6 @@ $('#invoiceDownloadBtn').addEventListener('click', () => {
   const doc = buildInvoicePdf(docData, company, Store.getProfile());
   doc.save(`${docData.invoiceNo.replace(/\//g, '-')}.pdf`);
 });
-
-$('#invoiceSendEmailBtn').addEventListener('click', withErrorToast(() => {
-  const [docData, company] = getInvoiceDraftDoc();
-  docData.amountInWords = amountInWords(docData.total);
-  const doc = buildInvoicePdf(docData, company, Store.getProfile());
-  return sendDocumentEmail('invoice', `${docData.invoiceNo.replace(/\//g, '-')}.pdf`, doc);
-}));
 
 $('#invoiceConfirmBtn').addEventListener('click', withErrorToast(async () => {
   if (blockIfViewer()) return;
@@ -2664,6 +2674,37 @@ document.addEventListener('click', withErrorToast((e) => {
     showInvoiceStep('form');
     openModal('invoiceModal');
   }
+  const duplicateId = e.target.getAttribute && e.target.getAttribute('data-duplicate-invoice');
+  if (duplicateId) {
+    const inv = Store.getInvoices().find(x => x.id === duplicateId);
+    draft.invoice = { items: JSON.parse(JSON.stringify(inv.items)) };
+    $('#invoiceId').value = ''; // blank id: saves as a brand-new record
+    $('#invoiceDate').value = inv.date;
+    $('#invoiceIsProforma').checked = !!inv.isProforma;
+    $('#invoiceNoLabel').textContent = inv.isProforma ? 'Proforma Invoice No' : 'Invoice No';
+    $('#invoiceNo').value = inv.isProforma ? getNextProformaInvoiceNo() : getNextInvoiceNo();
+    // Challan is always fresh-like-Add on Duplicate, never carried over from the source invoice.
+    $('#invoiceChallanNo').value = getNextChallanNo();
+    $('#invoiceChallanDate').value = todayISO();
+    $('#invoiceShowChallanDash').checked = false;
+    $('#invoiceChallanNo').disabled = false;
+    $('#invoiceChallanDate').disabled = false;
+    $('#invoicePoNumber').value = inv.poNumber || '';
+    $('#invoicePoDate').value = inv.poDate || '';
+    $('#invoiceIncludeSeal').checked = inv.includeSeal !== false;
+    $('#invoiceIncludeSignatory').checked = inv.includeSignatory !== false;
+    // Payment/advance state is never carried over — a duplicate never inherits "already paid".
+    $('#invoiceIsAdvancePayment').checked = false;
+    $('#invoiceIsAdvancePayment').disabled = !!inv.isProforma;
+    $('#invoiceAdvanceAmount').value = '';
+    $('#invoiceAdvanceAmountRow').style.display = 'none';
+    populateProductPicker($('#invoiceProductPicker'));
+    populateCompanyDropdowns({ invoice: inv.companyId });
+    $('#invoiceCompany').value = inv.companyId;
+    renderLineItems('invoice');
+    showInvoiceStep('form');
+    openModal('invoiceModal');
+  }
   const pdfId = e.target.getAttribute && e.target.getAttribute('data-pdf-invoice');
   if (pdfId) {
     const inv = Store.getInvoices().find(x => x.id === pdfId);
@@ -2706,9 +2747,10 @@ function renderServiceReports() {
       <td>${r.serviceDate ? fmtDateShort(r.serviceDate) : ''}</td>
       <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-serviceReport="${r.id}">Edit</button>
-        <button class="btn btn-secondary btn-sm" data-pdf-serviceReport="${r.id}">Download PDF</button>
-        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-serviceReport="${r.id}">Send Email</button>` : ''}
-        <button class="btn btn-danger btn-sm" data-delete-serviceReport="${r.id}">Delete</button>
+        <button class="btn btn-secondary btn-sm" data-duplicate-serviceReport="${r.id}">Duplicate</button>
+        <button class="btn btn-secondary btn-sm" data-pdf-serviceReport="${r.id}">PDF</button>
+        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-serviceReport="${r.id}">Email</button>` : ''}
+        ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-serviceReport="${r.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
       </div></td>
     </tr>
   `).join('');
@@ -2894,7 +2936,6 @@ function showServiceReportStep(step) {
   $('#serviceReportNextBtn').style.display = isForm ? '' : 'none';
   $('#serviceReportEditBtn').style.display = isForm ? 'none' : '';
   $('#serviceReportDownloadBtn').style.display = isForm ? 'none' : '';
-  $('#serviceReportSendEmailBtn').style.display = (isForm || !Store.getEmailTemplates().enabled) ? 'none' : '';
   $('#serviceReportConfirmBtn').style.display = isForm ? 'none' : '';
 }
 
@@ -3008,12 +3049,6 @@ $('#serviceReportDownloadBtn').addEventListener('click', () => {
   doc.save(`${docData.reportNo.replace(/\//g, '-')}.pdf`);
 });
 
-$('#serviceReportSendEmailBtn').addEventListener('click', withErrorToast(() => {
-  const [docData, company] = getServiceReportDraftDoc();
-  const doc = buildServiceReportPdf(docData, company, Store.getProfile());
-  return sendDocumentEmail('serviceReport', `${docData.reportNo.replace(/\//g, '-')}.pdf`, doc);
-}));
-
 $('#serviceReportConfirmBtn').addEventListener('click', withErrorToast(async () => {
   if (blockIfViewer()) return;
   const isNew = !$('#serviceReportId').value;
@@ -3042,6 +3077,28 @@ document.addEventListener('click', withErrorToast((e) => {
     };
     serviceReportParagraphAutoFilled = true; // never clobber an already-saved paragraph
     $('#serviceReportId').value = r.id;
+    $('#serviceReportDate').value = r.date;
+    $('#serviceReportServiceDate').value = r.serviceDate || '';
+    $('#serviceReportHeading').value = r.heading || '';
+    $('#serviceReportParagraph').value = r.paragraph || '';
+    $('#serviceReportIncludeSeal').checked = r.includeSeal !== false;
+    $('#serviceReportIncludeSignatory').checked = r.includeSignatory !== false;
+    populateCompanyDropdowns({ serviceReport: r.companyId });
+    $('#serviceReportCompany').value = r.companyId;
+    renderServiceReportTables();
+    renderServiceReportNotes();
+    showServiceReportStep('form');
+    openModal('serviceReportModal');
+  }
+  const duplicateId = e.target.getAttribute && e.target.getAttribute('data-duplicate-serviceReport');
+  if (duplicateId) {
+    const r = Store.getServiceReports().find(x => x.id === duplicateId);
+    draft.serviceReport = {
+      tables: JSON.parse(JSON.stringify(r.tables || [])),
+      notes: JSON.parse(JSON.stringify(r.notes || [])),
+    };
+    serviceReportParagraphAutoFilled = true; // never clobber the carried-over paragraph
+    $('#serviceReportId').value = ''; // blank id: saves as a brand-new record, with a fresh SR/ number
     $('#serviceReportDate').value = r.date;
     $('#serviceReportServiceDate').value = r.serviceDate || '';
     $('#serviceReportHeading').value = r.heading || '';
@@ -3134,7 +3191,7 @@ function renderPurchases() {
         <td class="truncate-cell" title="${escapeHtml(p.paymentNote || '')}">${escapeHtml(p.paymentNote || '-')}</td>
         <td><div class="actions-cell">
           <button class="btn btn-secondary btn-sm" data-edit-purchase="${p.id}">Edit</button>
-          <button class="btn btn-danger btn-sm" data-delete-purchase="${p.id}">Delete</button>
+          ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-purchase="${p.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
         </div></td>
       </tr>
     `).join('');
@@ -3532,7 +3589,7 @@ function renderExpenses() {
         <td>${fmt(e.amount)}</td>
         <td><div class="actions-cell">
           <button class="btn btn-secondary btn-sm" data-edit-expense="${e.id}">Edit</button>
-          <button class="btn btn-danger btn-sm" data-delete-expense="${e.id}">Delete</button>
+          ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-expense="${e.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
         </div></td>
       </tr>
     `).join('');
@@ -3636,7 +3693,7 @@ function renderConfigTable(type) {
       <td>${escapeHtml(String(r[cfg.field]))}${cfg.field === 'value' ? '%' : ''}</td>
       <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-config-type="${type}" data-edit-config-id="${r.id}">Edit</button>
-        <button class="btn btn-danger btn-sm" data-delete-config-type="${type}" data-delete-config-id="${r.id}">Delete</button>
+        ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-config-type="${type}" data-delete-config-id="${r.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
       </div></td>
     </tr>`).join('');
 }

@@ -99,6 +99,9 @@
     <button class="data-file-indicator" id="dataFileIndicator" type="button" title="Click to view/switch your connected data file">Connecting…</button>
   </div>
   <div class="header-actions">
+    <!-- Modern theme + mobile only (see css/style.css) — collapses/expands
+         .tabs-primary/.tabs-sub, which stay permanently visible otherwise. -->
+    <button class="btn btn-secondary mobile-nav-toggle" id="mobileNavToggle" type="button" aria-label="Menu">&#9776;</button>
     <button class="btn btn-secondary" id="btnOpenExport" type="button">Export</button>
     <button class="btn btn-secondary" id="btnLogout" type="button">Logout</button>
     <div class="settings-menu">
@@ -151,6 +154,11 @@
   <button class="tab-btn sub" data-tab="reports">Reports</button>
 </nav>
 
+<!-- Modern theme + mobile only: dims/blurs the rest of the list behind
+     whichever .tabs-sub is currently a popover (see setGroupExpanded() in
+     js/app.js). Hidden outright outside that context. -->
+<div class="mobile-nav-scrim" id="mobileNavScrim"></div>
+
 <!-- ===================== PRODUCTS ===================== -->
 <section class="tab-panel" id="tab-products">
   <div class="panel-header">
@@ -189,8 +197,11 @@
     <h2>Company</h2>
     <button class="btn btn-primary" id="btnAddCompany">+ Add Company</button>
   </div>
-  <div class="card">
-    <div class="table-filters">
+  <!-- Shared by both the table and tile views below (moved out of the table's own
+       card specifically so filtering stays usable in modern theme, where the table
+       card is hidden and only the tile grid shows). -->
+  <div class="card" style="margin-bottom:16px;">
+    <div class="table-filters" style="border-bottom:none;">
       <input type="search" id="companiesFilterSearch" placeholder="Search name, address, GSTIN...">
       <select id="companiesFilterType">
         <option value="">All Types</option>
@@ -200,6 +211,8 @@
       </select>
       <button type="button" class="filter-clear" id="companiesFilterClear">Clear</button>
     </div>
+  </div>
+  <div class="card" id="companiesTableCard">
     <table>
       <thead>
         <tr>
@@ -215,6 +228,20 @@
     </table>
     <div class="table-pagination" id="companiesPagination"></div>
   </div>
+  <!-- Modern-theme-only tile grid, same data as the table above (populateCompanyDropdowns'
+       Store.getCompanies() source) — hidden/shown opposite the table via body.theme-modern
+       CSS (see css/style.css), never both visible at once, never a user-facing toggle
+       between them per the modern theme's "tiles, no choice" requirement. -->
+  <div class="tile-grid" id="companiesTileGrid"></div>
+</section>
+
+<!-- ===================== COMPANY 360 (modern theme only, reached by clicking a company tile) ===================== -->
+<section class="tab-panel" id="tab-companyDetail">
+  <div class="back-link" id="companyDetailBackBtn" style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; margin-bottom:16px; display:inline-flex; align-items:center; gap:6px;">&larr; Back to Companies</div>
+  <div class="hero" id="companyDetailHero"></div>
+  <div class="stat-cards" id="companyDetailStats" style="margin-bottom:24px;"></div>
+  <div id="companyDetailCreateWrap" style="margin-bottom:20px; position:relative;"></div>
+  <div id="companyDetailSections"></div>
 </section>
 
 <!-- ===================== DEFAULT CONFIGURATIONS ===================== -->
@@ -389,7 +416,7 @@
 <section class="tab-panel active" id="tab-summary">
   <div class="panel-header"><h2>Summary</h2></div>
 
-  <div class="card" style="padding:18px; margin-bottom:24px;">
+  <div class="card" id="summaryOutstandingTableCard" style="padding:18px; margin-bottom:24px;">
     <h3 style="margin-top:0;">Outstanding by Company</h3>
     <table>
       <thead>
@@ -405,10 +432,45 @@
       <tbody id="summaryOutstandingTbody"></tbody>
     </table>
   </div>
+  <!-- Modern-theme-only tile grid for the table above, Sales Companies only,
+       sorted by Amount Owed desc then Expected Payment Date asc. -->
+  <div class="tile-grid" id="summaryOutstandingTileGrid"></div>
+</section>
 
-  <div class="card" style="padding:18px;">
+<!-- ===================== PROFIT & LOSS ===================== -->
+<section class="tab-panel" id="tab-pnl">
+  <div class="panel-header">
+    <h2>Profit &amp; Loss</h2>
+  </div>
+
+  <div class="stat-cards" id="pnlStatCards"></div>
+
+  <div class="card" style="padding:18px; margin-top:20px;">
     <div class="panel-header" style="margin-bottom:10px;">
-      <h3 style="margin:0;">Sales Over Time</h3>
+      <h3 style="margin:0;">By Period</h3>
+      <div class="seg-toggle">
+        <button class="seg-btn active" id="pnlAnnualBtn" type="button">Annual</button>
+        <button class="seg-btn" id="pnlMonthlyBtn" type="button">Monthly</button>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th class="sortable" data-sort-table="pnl" data-sort-key="key" data-sort-type="text">Period</th>
+          <th class="sortable" data-sort-table="pnl" data-sort-key="sales" data-sort-type="number">Sales</th>
+          <th class="sortable" data-sort-table="pnl" data-sort-key="tds" data-sort-type="number">TDS</th>
+          <th class="sortable" data-sort-table="pnl" data-sort-key="purchases" data-sort-type="number">Purchases</th>
+          <th class="sortable" data-sort-table="pnl" data-sort-key="expenses" data-sort-type="number">Expenses</th>
+          <th class="sortable" data-sort-table="pnl" data-sort-key="profit" data-sort-type="number">Profit / Loss</th>
+        </tr>
+      </thead>
+      <tbody id="pnlTbody"></tbody>
+    </table>
+  </div>
+
+  <div class="card" style="padding:18px; margin-top:20px;">
+    <div class="panel-header" style="margin-bottom:10px;">
+      <h3 style="margin:0;">Sales Over Time with GST</h3>
       <div class="seg-toggle">
         <button class="seg-btn active" id="summaryAnnualBtn" type="button">Annual</button>
         <button class="seg-btn" id="summaryMonthlyBtn" type="button">Monthly</button>
@@ -425,38 +487,6 @@
         </tr>
       </thead>
       <tbody id="summarySalesTbody"></tbody>
-    </table>
-  </div>
-</section>
-
-<!-- ===================== PROFIT & LOSS ===================== -->
-<section class="tab-panel" id="tab-pnl">
-  <div class="panel-header">
-    <h2>Profit &amp; Loss</h2>
-    <div class="seg-toggle">
-      <button class="seg-btn active" id="pnlAnnualBtn" type="button">Annual</button>
-      <button class="seg-btn" id="pnlMonthlyBtn" type="button">Monthly</button>
-    </div>
-  </div>
-
-  <div class="stat-cards" id="pnlStatCards"></div>
-
-  <div class="card" style="padding:18px; margin-top:20px;">
-    <div class="panel-header" style="margin-bottom:10px;">
-      <h3 style="margin:0;">By Period</h3>
-    </div>
-    <table>
-      <thead>
-        <tr>
-          <th class="sortable" data-sort-table="pnl" data-sort-key="key" data-sort-type="text">Period</th>
-          <th class="sortable" data-sort-table="pnl" data-sort-key="sales" data-sort-type="number">Sales</th>
-          <th class="sortable" data-sort-table="pnl" data-sort-key="tds" data-sort-type="number">TDS</th>
-          <th class="sortable" data-sort-table="pnl" data-sort-key="purchases" data-sort-type="number">Purchases</th>
-          <th class="sortable" data-sort-table="pnl" data-sort-key="expenses" data-sort-type="number">Expenses</th>
-          <th class="sortable" data-sort-table="pnl" data-sort-key="profit" data-sort-type="number">Profit / Loss</th>
-        </tr>
-      </thead>
-      <tbody id="pnlTbody"></tbody>
     </table>
   </div>
 </section>
@@ -1696,6 +1726,7 @@
           <div class="checkbox-row">
             <label><input type="checkbox" id="newUserIsAdmin"> Admin</label>
             <label><input type="checkbox" id="newUserIsViewer"> View Only</label>
+            <label><input type="checkbox" id="newUserIsModernTheme"> Modern Theme</label>
           </div>
         </div>
         <div class="form-field" style="justify-content:flex-end;">

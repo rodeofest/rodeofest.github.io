@@ -603,3 +603,308 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
   .free-table-toolbar, .free-table-new-row { flex-direction: column; align-items: flex-start; gap: 8px; }
   .free-table-grid textarea { width: 100%; font-size: 16px; }
 }
+
+/* =====================================================================
+   MODERN THEME — an entirely additive visual layer, scoped under
+   body.theme-modern (set once at login from currentUser.isModernTheme,
+   js/app.js's handleLoginSubmit()). Every rule below is prefixed with
+   that class, so a Classic-theme session (which never gets the class)
+   is byte-for-byte unaffected by anything in this section — this is the
+   whole safety mechanism, not just a convention.
+
+   Strategy: redeclare the existing CSS custom properties UNDER
+   body.theme-modern instead of :root, so every rule elsewhere in this
+   file that already consumes var(--accent)/var(--radius)/var(--shadow)/
+   var(--border) picks up the new look for free, with no selector-by-
+   selector duplication. --navy/--navy-light are deliberately NOT
+   redefined here: .doc-preview (the on-screen mirror of the actual PDF
+   output) also reads --navy, and a document preview must keep matching
+   the real, unthemed PDF regardless of which UI theme is viewing it —
+   so .topbar/.tabs/.tabs-sub/#toast (the only other --navy consumers)
+   get their own direct overrides below instead of a blanket redefine.
+   New concepts with no Classic equivalent (two-stop gradient, pill
+   radius, tinted shadow) get new additively-named --m-* tokens, also
+   scoped only inside body.theme-modern.
+===================================================================== */
+body.theme-modern {
+  --accent: #6366f1;
+  --accent-dark: #4f46e5;
+  --bg: #f3f4fb;
+  --border: #eceefb;
+  --radius: 18px;
+  --shadow: 0 4px 20px rgba(99, 102, 241, 0.10), 0 1px 3px rgba(26, 27, 46, 0.04);
+  --m-accent-1: #6366f1;
+  --m-accent-2: #8b5cf6;
+  --m-shadow-hover: 0 10px 28px rgba(99, 102, 241, 0.18), 0 2px 6px rgba(26, 27, 46, 0.06);
+  --m-bg-tint: #fafaff;
+  --m-radius-input: 10px;
+}
+
+/* Header / nav — direct overrides rather than a --navy redefine (see note above) */
+body.theme-modern .topbar,
+body.theme-modern .tabs,
+body.theme-modern .tabs-sub {
+  background: linear-gradient(120deg, var(--m-accent-1) 0%, var(--m-accent-2) 100%);
+}
+body.theme-modern #toast { background: linear-gradient(120deg, var(--m-accent-1), var(--m-accent-2)); }
+
+/* Buttons — pill-shaped, gradient primary */
+body.theme-modern .btn { border-radius: 999px; }
+body.theme-modern .btn-sm { border-radius: 999px; }
+body.theme-modern .btn-primary {
+  background: linear-gradient(120deg, var(--m-accent-1), var(--m-accent-2));
+  color: #fff;
+}
+body.theme-modern .btn-primary:hover { background: linear-gradient(120deg, var(--accent-dark), var(--m-accent-2)); }
+
+/* Cards — larger radius + softer tinted shadow come for free via the token
+   redefinition above; deliberately no hover-lift transform here (Phase 1 is
+   a broad, non-interactive reskin — hover-lift is reserved for genuinely
+   clickable surfaces introduced in later phases, like Company tiles, so a
+   plain content card never implies false clickability). */
+
+/* Segmented toggles — full pill */
+body.theme-modern .seg-toggle { border-radius: 999px; }
+body.theme-modern .seg-btn { border-radius: 999px; }
+
+/* Form fields — a softer radius than the full-pill buttons (a pill-shaped
+   multi-line textarea or long text input would look wrong) */
+body.theme-modern .form-field input,
+body.theme-modern .form-field select,
+body.theme-modern .form-field textarea,
+body.theme-modern .table-filters input[type="search"],
+body.theme-modern .table-filters select,
+body.theme-modern .checkbox-row input,
+body.theme-modern .chart-fy-row select {
+  border-radius: var(--m-radius-input);
+}
+
+/* Badges — slightly bolder in the modern type scale */
+body.theme-modern .badge { font-weight: 700; }
+
+/* Stat cards — a small accent bar for a bit more visual richness */
+body.theme-modern .stat-card { border-left: 4px solid var(--m-accent-1); }
+
+/* Panel tint backgrounds that are hardcoded to a literal color elsewhere in
+   this file (not token-driven, so the --bg redefinition above doesn't reach
+   them on its own) — nudged to match the new cooler, lavender-tinted page
+   background for visual cohesion. */
+body.theme-modern .table-filters,
+body.theme-modern .table-pagination,
+body.theme-modern tbody tr:hover,
+body.theme-modern .accordion-header:hover,
+body.theme-modern .payment-form-row,
+body.theme-modern .display-options {
+  background: var(--m-bg-tint);
+}
+
+/* ---- Company tiles + Company 360 (modern theme only) ----
+   #companiesTileGrid defaults to hidden via this plain (non-theme-scoped)
+   rule, not an inline style="display:none" — an inline style attribute
+   would always beat the body.theme-modern override below regardless of
+   selector specificity, which is exactly the bug this comment is here to
+   prevent reintroducing. */
+#companiesTileGrid { display: none; }
+body.theme-modern #companiesTableCard { display: none; }
+body.theme-modern #companiesTileGrid { display: grid; }
+
+/* ---- Summary "Outstanding by Company" tiles (modern theme only, point 1) ---- */
+#summaryOutstandingTileGrid { display: none; }
+body.theme-modern #summaryOutstandingTableCard { display: none; }
+body.theme-modern #summaryOutstandingTileGrid { display: grid; }
+
+/* ---- Mobile nav + tap-to-reveal row actions (modern theme only, point 6/10) ----
+   .mobile-nav-toggle is only ever shown under modern+mobile; it's a plain
+   .btn-secondary the rest of the time (hidden here) so it never visually
+   intrudes on desktop or Classic. Both default-hidden rules below are
+   deliberately plain/unconditional (outside the max-width:720px query their
+   own "shown" override lives in) — scoping a "display:none" default inside
+   the same query as its override leaves NO rule at all outside that query,
+   which silently falls back to the element's default display (block for a
+   plain <div>) instead of staying hidden. Confirmed live: .mobile-nav-scrim
+   rendered as a full, empty, invisible block at desktop width until this was
+   fixed. */
+.mobile-nav-toggle { display: none; }
+.mobile-nav-scrim { display: none; }
+
+@media (max-width: 720px) {
+  body.theme-modern .mobile-nav-toggle { display: inline-flex; align-items: center; justify-content: center; }
+  body.theme-modern .tabs-primary {
+    max-height: 0;
+    overflow: hidden;
+    flex-direction: column;
+    transition: max-height .2s ease;
+  }
+  /* The mobile menu is restyled as a white floating card, not a full-bleed
+     continuation of the purple gradient header — overrides the shared
+     "body.theme-modern .topbar, .tabs, .tabs-sub { background: gradient }"
+     rule (same specificity, later in the file, so this wins). */
+  body.theme-modern .tabs-primary {
+    background: var(--card-bg);
+    margin: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+  }
+  body.theme-modern.mobile-nav-open .tabs-primary {
+    max-height: 500px;
+  }
+
+  /* A group's sub-tabs (Financials/Sales/Charts-Reports) pop over the rest
+     of the list as a floating card, rather than pushing it down — confirmed
+     against a working mockup (mcp__visualize) before building this,
+     including a "smart positioning" pass: setGroupExpanded()/
+     positionPopover() in js/app.js compute top/max-height from the tapped
+     button's getBoundingClientRect() against the viewport, opening below by
+     default, flipping above when there's no room below (e.g. Charts/Reports
+     near the bottom of the list), and clamping with internal scroll as a
+     last resort. .tabs-sub never moves in the DOM for this (unlike the
+     inline-accordion version this replaced) — position:fixed plus computed
+     coordinates achieves the same visual adjacency without reparenting, so
+     there's no DOM-order bug class to guard against here. */
+  body.theme-modern .tabs-sub {
+    position: fixed;
+    left: 14px;
+    right: 14px;
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(-6px);
+    pointer-events: none;
+    flex-direction: column;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    z-index: 200;
+    transition: opacity .16s ease, transform .16s ease;
+  }
+  body.theme-modern .tabs-sub.popover-open {
+    max-height: none;
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+  body.theme-modern .mobile-nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(17, 24, 39, 0);
+    backdrop-filter: blur(0px);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 150;
+    transition: opacity .18s ease;
+  }
+  body.theme-modern .mobile-nav-scrim.open {
+    background: rgba(17, 24, 39, 0.28);
+    backdrop-filter: blur(1px);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Text/row styling for the white-card menu (see .tabs-primary's background
+     override above) — the base .tab-btn color (rgba(255,255,255,.7)) and its
+     accent-colored bottom-border assume the old dark/gradient backdrop, so
+     both are overridden here for a plain list-on-white look: dark text, a
+     thin hairline between rows instead of a colored underline, and a subtle
+     tint + bold on whichever row is current. */
+  body.theme-modern .tabs-primary .tab-btn,
+  body.theme-modern .tabs-sub .tab-btn {
+    text-align: left;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+  }
+  body.theme-modern .tabs-primary .tab-btn:hover,
+  body.theme-modern .tabs-sub .tab-btn:hover {
+    color: var(--text);
+  }
+  body.theme-modern .tabs-primary .tab-btn.active,
+  body.theme-modern .tabs-primary .tab-btn.expanded {
+    background: rgba(99, 102, 241, 0.08);
+    border-bottom-color: var(--border);
+  }
+  body.theme-modern .tabs-primary .tab-btn[data-group] {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  body.theme-modern .tabs-primary .tab-btn[data-group]::after {
+    content: '\25BE';
+    font-size: 11px;
+    opacity: .75;
+    margin-left: 8px;
+  }
+  body.theme-modern .tabs-primary .tab-btn[data-group].expanded::after {
+    content: '\25B4';
+  }
+  /* The individual child rows carry the "purplish" tint, using
+     --m-accent-1-based tokens now that the popover's own backdrop is white
+     instead of the old gradient (which is why these were white-based
+     overlays before this restyle — see CLAUDE.md's Modern Theme section for
+     that history). */
+  body.theme-modern .tabs-sub .tab-btn.sub {
+    padding-left: 34px;
+    background: rgba(99, 102, 241, 0.06);
+    color: var(--text-muted);
+  }
+  body.theme-modern .tabs-sub .tab-btn.sub.active {
+    background: rgba(99, 102, 241, 0.14);
+    color: var(--m-accent-1);
+    font-weight: 600;
+    border-bottom-color: var(--border);
+    border-left: 3px solid var(--m-accent-1);
+    padding-left: 31px;
+  }
+
+  /* Actions hidden by default within the row's own height, fading in (not
+     pushing the row taller) when that row is tapped — .row-revealed is
+     toggled by one generic delegated listener in js/app.js, works across
+     every table with .actions-cell with no per-table code. */
+  body.theme-modern tbody tr,
+  body.theme-modern .reveal-actions-row {
+    position: relative;
+  }
+  body.theme-modern .actions-cell {
+    position: absolute; top: 0; right: 0; bottom: 0;
+    align-items: center;
+    background: transparent;
+    padding-left: 10px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .15s ease;
+  }
+  body.theme-modern tr.row-revealed .actions-cell,
+  body.theme-modern .reveal-actions-row.row-revealed .actions-cell {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+body.theme-modern .tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+body.theme-modern .company-tile {
+  padding: 18px;
+  cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+body.theme-modern .company-tile:hover { transform: translateY(-3px); box-shadow: var(--m-shadow-hover); }
+body.theme-modern .company-tile.inactive { opacity: .55; }
+body.theme-modern .tile-top { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+body.theme-modern .tile-name { font-weight: 700; font-size: 14.5px; margin: 0 0 2px; }
+body.theme-modern .tile-addr { color: var(--text-muted); font-size: 11.5px; }
+body.theme-modern .avatar {
+  width: 42px; height: 42px; border-radius: 13px; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 800; font-size: 15px; flex-shrink: 0;
+  background: linear-gradient(135deg, var(--m-accent-1), var(--m-accent-2));
+}
+body.theme-modern .tile-stats { display: flex; gap: 10px; margin-top: 14px; }
+body.theme-modern .stat-chip { flex: 1; border-radius: 12px; padding: 9px 11px; }
+body.theme-modern .stat-chip .num { font-weight: 800; font-size: 14px; display: block; }
+body.theme-modern .stat-chip .label { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; opacity: .75; }
+body.theme-modern .stat-chip.owed { background: #feeceb; color: var(--danger); }
+body.theme-modern .stat-chip.clear { background: #e7f9ef; color: var(--success); }
+body.theme-modern .stat-chip.neutral { background: var(--m-bg-tint); color: var(--text); }
+body.theme-modern #companyDetailCreateWrap .settings-dropdown { top: 42px; left: 0; right: auto; }

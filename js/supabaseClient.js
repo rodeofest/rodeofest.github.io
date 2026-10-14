@@ -66,7 +66,7 @@ const SupabaseClient = {
       ErrorLog.record('Could not load the logged-in user\'s profile', error, { source: 'SupabaseClient.getMyProfile' });
       throw error;
     }
-    return { username: data.username, isAdmin: !!data.is_admin, isViewer: !!data.is_viewer };
+    return { username: data.username, isAdmin: !!data.is_admin, isViewer: !!data.is_viewer, isModernTheme: !!data.is_modern_theme };
   },
 
   async listProfiles() {
@@ -75,7 +75,7 @@ const SupabaseClient = {
       ErrorLog.record('Could not load the user list', error, { source: 'SupabaseClient.listProfiles' });
       throw error;
     }
-    return (data || []).map((p) => ({ username: p.username, isAdmin: !!p.is_admin, isViewer: !!p.is_viewer }));
+    return (data || []).map((p) => ({ username: p.username, isAdmin: !!p.is_admin, isViewer: !!p.is_viewer, isModernTheme: !!p.is_modern_theme }));
   },
 
   async createUser(username, password, isAdmin) {
@@ -118,6 +118,14 @@ const SupabaseClient = {
     const { error } = await sbClient.from('profiles').update({ is_viewer: !!isViewer }).eq('username', username);
     if (error) {
       ErrorLog.record('Could not update viewer role for "' + username + '"', error, { source: 'SupabaseClient.setViewerFlag', username });
+      throw error;
+    }
+  },
+
+  async setModernThemeFlag(username, isModernTheme) {
+    const { error } = await sbClient.from('profiles').update({ is_modern_theme: !!isModernTheme }).eq('username', username);
+    if (error) {
+      ErrorLog.record('Could not update theme for "' + username + '"', error, { source: 'SupabaseClient.setModernThemeFlag', username });
       throw error;
     }
   },

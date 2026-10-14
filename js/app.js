@@ -3,8 +3,20 @@
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
-/* Set once runLoginGate() resolves (see the bottom of this file); { username, isAdmin, isViewer }. */
+/* Set once runLoginGate() resolves (see the bottom of this file); { username, isAdmin, isViewer, isModernTheme }. */
 let currentUser = null;
+
+/* Cached copy of currentUser.isModernTheme, set once at login alongside the other
+   session-wide flags below — the single source of truth every modern-theme-only
+   code path in this file reads, instead of re-deriving it from currentUser or the
+   body class each time. Never re-evaluated mid-session, same as is_admin/is_viewer. */
+let isModernThemeActive = false;
+
+/* Which company's 360 page (modern theme only) is currently open, or null.
+   #tab-companyDetail is deliberately not registered with activateTab()'s
+   dispatch/tabGroups/Tab Layout — it's a record drilldown, reached only by
+   clicking a company tile/row, not a 7th configurable nav tab. */
+let openCompanyDetailId = null;
 
 /* Called as the first line of every handler that mutates business data — the real
    enforcement for the view-only role (js/storage.js's writeList/writeObject throwing
@@ -148,7 +160,13 @@ function getDefaultLandingTabId() {
    tab selection" in CLAUDE.md. */
 const TAB_LAZY_KEYS = {
   products: [STORAGE_KEYS.products],
-  companies: [STORAGE_KEYS.companies],
+  /* Modern theme's company tiles (renderCompanyTiles()) show live Outstanding
+     and Purchase Outstanding stat chips, sourced from computeCompanyOutstanding()
+     (invoices) and computeCompanyPurchaseOutstanding() (purchases) respectively
+     — both keys are included here so visiting Companies always refreshes the
+     data those chips depend on, not just companies themselves. Classic theme
+     doesn't render tiles at all, so this is a no-op cost there. */
+  companies: [STORAGE_KEYS.companies, STORAGE_KEYS.invoices, STORAGE_KEYS.purchases],
   quotations: [STORAGE_KEYS.quotations, STORAGE_KEYS.companies],
   amcQuotations: [STORAGE_KEYS.quotations, STORAGE_KEYS.companies],
   invoices: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
@@ -233,7 +251,7 @@ async function activateTab(tabId) {
   if (tabId === 'serviceReports') renderServiceReports();
   if (tabId === 'purchases') { renderPurchases(); renderExpenses(); renderMissingPurchaseEntries(); }
   if (tabId === 'summary') renderSummary();
-  if (tabId === 'pnl') renderProfitLoss();
+  if (tabId === 'pnl') { renderProfitLoss(); renderSummarySales(); }
   if (tabId === 'gst') renderGstPayment();
   if (tabId === 'companySalesChart') renderCompanySalesChart();
   if (tabId === 'productSalesChart') renderProductSalesChart();
@@ -262,17 +280,81 @@ function showSubnav(group) {
   }
 }
 
+/* Modern-theme mobile nav: a group's sub-tabs pop over the rest of the list
+   as a floating card instead of reflowing it, confirmed against a working
+   mockup (mcp__visualize) before building this — see CLAUDE.md's "Modern
+   Theme" section. .tabs-sub never moves in the DOM (index.html's
+   .tabs-primary/.tabs-sub are plain siblings, not nested); position:fixed
+   plus coordinates computed from the tapped button's own position achieves
+   the same visual adjacency without reparenting. */
+function isMobileModernNav() {
+  return isModernThemeActive && window.matchMedia('(max-width: 720px)').matches;
+}
+
+/* Opens below the tapped button by default; flips above it when there's not
+   enough room below (e.g. a group near the bottom of the list); clamps with
+   internal scroll as a last resort if it doesn't fit either way. The final
+   clamp below is a second, independent safety net on top of that: it caps
+   top/bottom against the actual viewport regardless of which branch ran,
+   so even a button sitting right at (or, on a very short/landscape
+   viewport, just past) the visible edge can never produce a popover that
+   renders partially or fully off-screen. */
+function positionPopover(btn, nav) {
+  nav.style.maxHeight = 'none';
+  const popH = nav.scrollHeight;
+  const btnR = btn.getBoundingClientRect();
+  const gap = 6, margin = 10;
+  const viewportH = window.innerHeight;
+  const spaceBelow = viewportH - btnR.bottom - margin;
+  const spaceAbove = btnR.top - margin;
+  let top, maxH = null;
+  if (popH <= spaceBelow - gap) {
+    top = btnR.bottom + gap;
+  } else if (popH <= spaceAbove - gap) {
+    top = btnR.top - popH - gap;
+  } else if (spaceBelow >= spaceAbove) {
+    top = btnR.bottom + gap;
+    maxH = Math.max(spaceBelow - gap, 80);
+  } else {
+    maxH = Math.max(spaceAbove - gap, 80);
+    top = btnR.top - maxH - gap;
+  }
+  const renderedH = maxH || popH;
+  top = Math.max(margin, Math.min(top, viewportH - margin - renderedH));
+  nav.style.top = top + 'px';
+  nav.style.maxHeight = maxH ? maxH + 'px' : '';
+}
+
+function setGroupExpanded(group) {
+  $$('.tabs-primary .tab-btn[data-group]').forEach(b => b.classList.remove('expanded'));
+  $$('.tabs-sub').forEach(n => n.classList.remove('popover-open'));
+  $('#mobileNavScrim').classList.remove('open');
+  if (!group) return;
+  const btn = $(`.tabs-primary .tab-btn[data-group="${group}"]`);
+  const nav = $('#subnav-' + group);
+  if (!btn || !nav) return;
+  btn.classList.add('expanded');
+  if (isMobileModernNav()) {
+    positionPopover(btn, nav);
+    nav.classList.add('popover-open');
+    $('#mobileNavScrim').classList.add('open');
+  }
+}
+
 $$('.tabs-primary .tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     if (btn.dataset.group) {
       const group = btn.dataset.group;
+      const wasExpanded = btn.classList.contains('expanded');
       setPrimaryActive(group);
       showSubnav(group);
       activateTab(lastSubTab[group]);
+      if (isMobileModernNav()) setGroupExpanded(wasExpanded ? null : group);
     } else {
       setPrimaryActive(btn.dataset.tab);
       showSubnav(null);
       activateTab(btn.dataset.tab);
+      if (isMobileModernNav()) setGroupExpanded(null);
     }
   });
 });
@@ -733,7 +815,8 @@ $('#saveProductBtn').addEventListener('click', withErrorToast(() => {
 document.addEventListener('click', withErrorToast((e) => {
   const editId = e.target.getAttribute && e.target.getAttribute('data-edit-product');
   if (editId) openProductModal(Store.getProducts().find(p => p.id === editId));
-  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-product');
+  const delBtn = e.target.closest && e.target.closest('[data-delete-product]');
+  const delId = delBtn ? delBtn.getAttribute('data-delete-product') : null;
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
@@ -794,6 +877,7 @@ function renderCompanies() {
     $('#companiesPagination').innerHTML = renderPaginationBar('companies', pageMeta);
   }
   updateSortIndicators('companies');
+  if (isModernThemeActive) renderCompanyTiles(all.length ? sortRows(applyCompaniesFilter(all), 'companies') : []);
 }
 
 $('#companiesFilterSearch').addEventListener('input', (e) => { filterState.companies.search = e.target.value; if (paginationState.companies) paginationState.companies.page = 1; renderCompanies(); });
@@ -845,13 +929,15 @@ $('#saveCompanyBtn').addEventListener('click', withErrorToast(() => {
   renderCompanies();
   populateCompanyDropdowns();
   populatePurchasesFilterOptions();
+  if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId);
   toast('Company saved');
 }));
 
 document.addEventListener('click', withErrorToast((e) => {
   const editId = e.target.getAttribute && e.target.getAttribute('data-edit-company');
   if (editId) openCompanyModal(Store.getCompanies().find(c => c.id === editId));
-  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-company');
+  const delBtn = e.target.closest && e.target.closest('[data-delete-company]');
+  const delId = delBtn ? delBtn.getAttribute('data-delete-company') : null;
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
@@ -860,11 +946,16 @@ document.addEventListener('click', withErrorToast((e) => {
         const c = Store.getCompanies().find(x => x.id === delId);
         Store.saveCompany(Object.assign({}, c, { isActive: false }));
         renderCompanies(); populateCompanyDropdowns(); populatePurchasesFilterOptions();
+        if (openCompanyDetailId === delId) renderCompanyDetail(delId);
         toast('Company marked Inactive');
       }
       return;
     }
-    if (confirm('Delete this company?')) { Store.deleteCompany(delId); renderCompanies(); populateCompanyDropdowns(); populatePurchasesFilterOptions(); toast('Company deleted'); }
+    if (confirm('Delete this company?')) {
+      Store.deleteCompany(delId); renderCompanies(); populateCompanyDropdowns(); populatePurchasesFilterOptions();
+      if (openCompanyDetailId === delId) { openCompanyDetailId = null; activateTab('companies'); }
+      toast('Company deleted');
+    }
   }
   const activateId = e.target.getAttribute && e.target.getAttribute('data-activate-company');
   if (activateId) {
@@ -872,9 +963,278 @@ document.addEventListener('click', withErrorToast((e) => {
     const c = Store.getCompanies().find(x => x.id === activateId);
     Store.saveCompany(Object.assign({}, c, { isActive: true }));
     renderCompanies(); populateCompanyDropdowns(); populatePurchasesFilterOptions();
+    if (openCompanyDetailId === activateId) renderCompanyDetail(activateId);
     toast('Company marked Active');
   }
 }));
+
+/* =====================================================================
+   COMPANY TILES + COMPANY 360 (modern theme only)
+===================================================================== */
+function renderCompanyTiles(companies) {
+  const grid = $('#companiesTileGrid');
+  if (!companies.length) {
+    grid.innerHTML = `<div class="card" style="padding:30px; text-align:center; color:var(--text-muted);">No companies match your filters.</div>`;
+    return;
+  }
+  const outstandingByCompanyId = new Map(computeCompanyOutstanding().map(r => [r.company.id, r]));
+  const purchaseOutstandingByCompanyId = new Map(computeCompanyPurchaseOutstanding().map(r => [r.company.id, r]));
+  grid.innerHTML = companies.map(c => {
+    const outstanding = outstandingByCompanyId.get(c.id);
+    const purchaseOutstanding = purchaseOutstandingByCompanyId.get(c.id);
+    return `
+    <div class="card company-tile ${c.isActive === false ? 'inactive' : ''}" data-open-company="${c.id}">
+      <div class="tile-top">
+        <div class="avatar">${escapeHtml((c.name || '?').trim().slice(0, 2).toUpperCase())}</div>
+        <div>
+          <p class="tile-name">${escapeHtml(c.name)}</p>
+          <div class="tile-addr">${escapeHtml(c.address || '')}</div>
+        </div>
+      </div>
+      <div>${companyTypeBadges(c)}${c.isActive === false ? ' <span class="badge badge-muted">Inactive</span>' : ''}</div>
+      <div class="tile-stats">
+        ${c.isSalesCompany ? `
+        <div class="stat-chip ${outstanding && outstanding.owed > 0.009 ? 'owed' : 'clear'}">
+          <span class="num">${outstanding && outstanding.owed > 0.009 ? fmt(outstanding.owed) : (outstanding ? 'All paid' : '-')}</span>
+          <span class="label">Outstanding</span>
+        </div>` : ''}
+        ${c.isPurchaseCompany ? `
+        <div class="stat-chip ${purchaseOutstanding && purchaseOutstanding.owed > 0.009 ? 'owed' : 'clear'}">
+          <span class="num">${purchaseOutstanding && purchaseOutstanding.owed > 0.009 ? fmt(purchaseOutstanding.owed) : (purchaseOutstanding ? 'All paid' : '-')}</span>
+          <span class="label">Purchase Outstanding</span>
+        </div>` : ''}
+        <div class="stat-chip neutral"><span class="num">Net ${Number(c.paymentTermsDays) || 0}d</span><span class="label">Payment Terms</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+document.addEventListener('click', (e) => {
+  const tile = e.target.closest && e.target.closest('[data-open-company]');
+  if (tile) openCompanyDetail(tile.getAttribute('data-open-company'));
+});
+
+async function openCompanyDetail(companyId) {
+  openCompanyDetailId = companyId;
+  $$('.tab-panel').forEach(p => p.classList.remove('active'));
+  $('#tab-companyDetail').classList.add('active');
+  $('#companyDetailSections').innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:30px;">Loading…</div>';
+  try {
+    await Store.refreshSupabaseKeys([STORAGE_KEYS.invoices, STORAGE_KEYS.purchases, STORAGE_KEYS.quotations, STORAGE_KEYS.serviceReports]);
+  } catch (e) {
+    toast('Could not load data: ' + (e.message || e));
+  }
+  renderCompanyDetail(companyId);
+}
+
+$('#companyDetailBackBtn').addEventListener('click', () => { openCompanyDetailId = null; activateTab('companies'); });
+
+function companyHistorySectionHtml(title, rows, columns, emptyLabel) {
+  if (!rows.length) {
+    return `<div class="card" style="padding:18px; margin-bottom:16px;"><h3 style="margin-top:0;">${escapeHtml(title)}</h3><div style="color:var(--text-muted); padding:10px 0;">${escapeHtml(emptyLabel)}</div></div>`;
+  }
+  return `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="panel-header" style="padding:16px 18px 0;"><h3 style="margin:0;">${escapeHtml(title)}</h3></div>
+      <table>
+        <thead><tr>${columns.map(col => `<th>${escapeHtml(col)}</th>`).join('')}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function renderCompanyDetail(companyId) {
+  const c = Store.getCompanies().find(x => x.id === companyId);
+  if (!c) { openCompanyDetailId = null; activateTab('companies'); return; }
+  const outstanding = computeCompanyOutstanding().find(r => r.company.id === companyId);
+
+  $('#companyDetailHero').innerHTML = `
+    <div class="reveal-actions-row" style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px; margin-bottom:20px;">
+      <div style="display:flex; gap:14px; align-items:flex-start;">
+        <div class="avatar" style="width:52px; height:52px; font-size:18px;">${escapeHtml((c.name || '?').trim().slice(0, 2).toUpperCase())}</div>
+        <div>
+          <h2 style="margin:0 0 6px;">${escapeHtml(c.name)}</h2>
+          <div style="color:var(--text-muted); font-size:13px; line-height:1.6;">
+            ${escapeHtml(c.address || '')}${c.address && c.gstin ? '<br>' : ''}${c.gstin ? 'GSTIN: ' + escapeHtml(c.gstin) : ''}
+          </div>
+          <div style="margin-top:8px;">${companyTypeBadges(c)}${c.isActive === false ? ' <span class="badge badge-muted">Inactive</span>' : ''} <span class="badge badge-muted">Net ${Number(c.paymentTermsDays) || 0} days</span></div>
+        </div>
+      </div>
+      <div class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-company="${c.id}">Edit</button>
+        ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-company="${c.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
+      </div>
+    </div>`;
+
+  const purchaseOutstanding = c.isPurchaseCompany ? computeCompanyPurchaseOutstanding().find(r => r.company.id === companyId) : null;
+  const purchaseOwed = purchaseOutstanding ? purchaseOutstanding.owed : 0;
+
+  $('#companyDetailStats').innerHTML = `
+    ${c.isSalesCompany ? `
+    <div class="stat-card ${outstanding && outstanding.owed > 0.009 ? 'negative' : ''}"><div class="label">Outstanding</div><div class="value">${outstanding ? fmt(outstanding.owed) : fmt(0)}</div></div>
+    <div class="stat-card"><div class="label">Unpaid Invoices</div><div class="value">${outstanding ? outstanding.unpaidCount : 0}</div></div>
+    ${outstanding && outstanding.expectedDate ? `<div class="stat-card"><div class="label">Expected Payment Date</div><div class="value" style="font-size:15px;">${fmtDateShort(outstanding.expectedDate)}</div></div>` : ''}` : ''}
+    ${c.isPurchaseCompany ? `
+    <div class="stat-card ${purchaseOwed > 0.009 ? 'negative' : ''}"><div class="label">Purchase Outstanding</div><div class="value">${fmt(purchaseOwed)}</div></div>
+    <div class="stat-card"><div class="label">Unpaid Purchases</div><div class="value">${purchaseOutstanding ? purchaseOutstanding.unpaidCount : 0}</div></div>` : ''}
+  `;
+
+  $('#companyDetailCreateWrap').innerHTML = (c.isSalesCompany || c.isPurchaseCompany) ? `
+    <div class="settings-menu">
+      <button class="btn btn-primary" id="companyCreateBtn" type="button">+ Create</button>
+      <div class="settings-dropdown" id="companyCreateDropdown">
+        ${c.isSalesCompany ? `
+        <button type="button" data-create-doc="invoice">Invoice</button>
+        <button type="button" data-create-doc="quotation">Quotation</button>
+        <button type="button" data-create-doc="serviceReport">Service Report</button>
+        <button type="button" data-create-doc="amcQuotation">AMC Quotation</button>` : ''}
+        ${c.isPurchaseCompany ? `<button type="button" data-create-doc="purchase">Purchase</button>` : ''}
+      </div>
+    </div>` : '';
+
+  const sections = [];
+  if (c.isSalesCompany) {
+    sections.push(companyHistorySectionHtml('Sales History',
+      buildCompanyInvoiceRows(companyId).map(companyDetailInvoiceRow).join(''),
+      ['Invoice No', 'Date', 'Subtotal', 'GST', 'Total', 'Status', 'Actions'], 'No invoices yet.'));
+    sections.push(companyHistorySectionHtml('Quote History',
+      Store.getQuotations().filter(q => q.companyId === companyId && !q.isAMC)
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .map(q => `<tr><td>${escapeHtml(q.quotationNo)}</td><td>${fmtDateShort(q.date)}</td><td><div class="actions-cell">
+          <button class="btn btn-secondary btn-sm" data-edit-quotation="${q.id}">Edit</button>
+          <button class="btn btn-secondary btn-sm" data-duplicate-quotation="${q.id}">Duplicate</button>
+          <button class="btn btn-secondary btn-sm" data-pdf-quotation="${q.id}">PDF</button>
+          ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-quotation="${q.id}">Email</button>` : ''}
+          ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-quotation="${q.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
+        </div></td></tr>`).join(''),
+      ['Quotation No', 'Date', 'Actions'], 'No quotations yet.'));
+    sections.push(companyHistorySectionHtml('AMC Quotation History',
+      Store.getQuotations().filter(q => q.companyId === companyId && q.isAMC)
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .map(q => `<tr><td>${escapeHtml(q.quotationNo)}</td><td>${fmtDateShort(q.date)}</td><td><div class="actions-cell">
+          <button class="btn btn-secondary btn-sm" data-edit-amcQuotation="${q.id}">Edit</button>
+          <button class="btn btn-secondary btn-sm" data-pdf-amcQuotation="${q.id}">PDF</button>
+          ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-amcQuotation="${q.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
+        </div></td></tr>`).join(''),
+      ['Quotation No', 'Date', 'Actions'], 'No AMC quotations yet.'));
+    sections.push(companyHistorySectionHtml('Service Report History',
+      Store.getServiceReports().filter(r => r.companyId === companyId)
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .map(r => `<tr><td>${escapeHtml(r.reportNo)}</td><td>${fmtDateShort(r.date)}</td><td>${r.serviceDate ? fmtDateShort(r.serviceDate) : '-'}</td><td><div class="actions-cell">
+          <button class="btn btn-secondary btn-sm" data-edit-serviceReport="${r.id}">Edit</button>
+          <button class="btn btn-secondary btn-sm" data-duplicate-serviceReport="${r.id}">Duplicate</button>
+          <button class="btn btn-secondary btn-sm" data-pdf-serviceReport="${r.id}">PDF</button>
+          ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-serviceReport="${r.id}">Email</button>` : ''}
+          ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-serviceReport="${r.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
+        </div></td></tr>`).join(''),
+      ['Report No', 'Report Date', 'Date of Service', 'Actions'], 'No service reports yet.'));
+  }
+  if (c.isPurchaseCompany) {
+    sections.push(companyHistorySectionHtml('Purchase History',
+      buildCompanyPurchaseRows(companyId).map(companyDetailPurchaseRow).join(''),
+      ['Purchase No', 'Date', 'Subtotal', 'GST', 'Total', 'Status', 'Actions'], 'No purchases yet.'));
+  }
+  $('#companyDetailSections').innerHTML = sections.join('');
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.id === 'companyCreateBtn') {
+    e.stopPropagation();
+    $('#companyCreateDropdown').classList.toggle('open');
+    return;
+  }
+  const createKind = e.target.getAttribute && e.target.getAttribute('data-create-doc');
+  if (!createKind) return;
+  $('#companyCreateDropdown').classList.remove('open');
+  const companyId = openCompanyDetailId;
+  if (createKind === 'invoice') {
+    resetInvoiceModal();
+    populateCompanyDropdowns({ invoice: companyId });
+    $('#invoiceCompany').value = companyId;
+    renderLineItems('invoice');
+    openModal('invoiceModal');
+  } else if (createKind === 'quotation') {
+    resetQuotationModal();
+    populateCompanyDropdowns({ quotation: companyId });
+    $('#quotationCompany').value = companyId;
+    renderLineItems('quotation');
+    openModal('quotationModal');
+  } else if (createKind === 'serviceReport') {
+    resetServiceReportModal();
+    populateCompanyDropdowns({ serviceReport: companyId });
+    $('#serviceReportCompany').value = companyId;
+    maybeAutoFillServiceReportParagraph();
+    openModal('serviceReportModal');
+  } else if (createKind === 'amcQuotation') {
+    resetAmcQuotationModal();
+    populateCompanyDropdowns({ amcQuotation: companyId });
+    $('#amcQuotationCompany').value = companyId;
+    renderAmcLineItems();
+    openModal('amcQuotationModal');
+  } else if (createKind === 'purchase') {
+    resetPurchaseModal();
+    populateCompanyDropdowns({ purchase: companyId });
+    $('#purchaseCompany').value = companyId;
+    openModal('purchaseModal');
+  }
+});
+
+/* =====================================================================
+   MOBILE NAV + TAP-TO-REVEAL ROW ACTIONS (modern theme only)
+===================================================================== */
+$('#mobileNavToggle').addEventListener('click', () => {
+  const nowOpen = document.body.classList.toggle('mobile-nav-open');
+  if (!nowOpen) setGroupExpanded(null);
+});
+
+/* Tapping the dimmed backdrop behind an open popover closes it, same as
+   tapping a leaf item — standard "tap outside to dismiss" behavior. */
+$('#mobileNavScrim').addEventListener('click', () => setGroupExpanded(null));
+
+/* Closes any open popover and the hamburger menu the moment the viewport
+   grows past mobile width, so a group popover opened on a phone can never
+   stay stuck visible (position:fixed survives a resize on its own) once the
+   two-bar desktop layout is showing again. A no-op while still mobile-width,
+   so an in-progress interaction (e.g. a phone keyboard opening) is never
+   disturbed. */
+window.addEventListener('resize', () => {
+  if (!isModernThemeActive) return;
+  if (window.matchMedia('(max-width: 720px)').matches) return;
+  setGroupExpanded(null);
+  document.body.classList.remove('mobile-nav-open');
+});
+
+/* Auto-collapse the mobile menu once a leaf tab is picked — standard
+   "select closes the menu" mobile UX. A group button (Financials/Sales/
+   Charts/Reports, identified by data-group rather than data-tab) is
+   deliberately excluded: tapping it only reveals its own sub-tabs in
+   place (showSubnav()), it doesn't navigate anywhere by itself, so
+   closing the menu here used to hide those sub-tabs again the instant
+   they appeared — a real bug, not just a cosmetic one, since it meant
+   the sub-tab list was only ever visible after reopening the menu a
+   second time, by which point it had lost any visual connection to the
+   group button that revealed it. */
+document.addEventListener('click', (e) => {
+  if (!isModernThemeActive) return;
+  if (!window.matchMedia('(max-width: 720px)').matches) return;
+  const tabBtn = e.target.closest && e.target.closest('.tab-btn');
+  if (tabBtn && !tabBtn.dataset.group) {
+    document.body.classList.remove('mobile-nav-open');
+    setGroupExpanded(null);
+  }
+});
+
+/* Generic tap-to-reveal for every table's .actions-cell on mobile+modern —
+   no per-table wiring. Self-guards on theme + viewport so it's a no-op
+   everywhere else (Classic theme, desktop widths). */
+document.addEventListener('click', (e) => {
+  if (!isModernThemeActive) return;
+  if (!window.matchMedia('(max-width: 720px)').matches) return;
+  if (e.target.closest && e.target.closest('.actions-cell')) return; // let the real button handle its own click
+  const tr = e.target.closest && e.target.closest('tbody tr, .reveal-actions-row');
+  $$('.row-revealed').forEach(r => { if (r !== tr) r.classList.remove('row-revealed'); });
+  if (tr && tr.querySelector('.actions-cell')) tr.classList.toggle('row-revealed');
+});
 
 /* =====================================================================
    BUSINESS PROFILE
@@ -1172,6 +1532,7 @@ async function renderUserConfigTable() {
           <button class="btn btn-secondary btn-sm" data-reset-user="${escapeHtml(p.username)}">Reset Password</button>
           <button class="btn btn-secondary btn-sm" data-toggle-admin-user="${escapeHtml(p.username)}" data-current-admin="${p.isAdmin}">${p.isAdmin ? 'Revoke Admin' : 'Make Admin'}</button>
           <button class="btn btn-secondary btn-sm" data-toggle-viewer-user="${escapeHtml(p.username)}" data-current-viewer="${p.isViewer}">${p.isViewer ? 'Remove Viewer' : 'Make Viewer'}</button>
+          <button class="btn btn-secondary btn-sm" data-toggle-modern-user="${escapeHtml(p.username)}" data-current-modern="${p.isModernTheme}">${p.isModernTheme ? 'Switch to Classic' : 'Switch to Modern'}</button>
           ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-user="${escapeHtml(p.username)}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
         </div></td>
       </tr>
@@ -1186,6 +1547,7 @@ async function openUserConfigModal() {
   $('#newUserPassword').value = '';
   $('#newUserIsAdmin').checked = false;
   $('#newUserIsViewer').checked = false;
+  $('#newUserIsModernTheme').checked = false;
   openModal('userConfigModal');
   await renderUserConfigTable();
 }
@@ -1195,14 +1557,17 @@ $('#createUserBtn').addEventListener('click', async () => {
   const password = $('#newUserPassword').value;
   const isAdmin = $('#newUserIsAdmin').checked;
   const isViewer = $('#newUserIsViewer').checked;
+  const isModernTheme = $('#newUserIsModernTheme').checked;
   if (!username || !password) { toast('User ID and password are required'); return; }
   try {
     await SupabaseClient.createUser(username, password, isAdmin);
     if (isViewer && !isAdmin) await SupabaseClient.setViewerFlag(username, true);
+    if (isModernTheme) await SupabaseClient.setModernThemeFlag(username, true);
     $('#newUserUsername').value = '';
     $('#newUserPassword').value = '';
     $('#newUserIsAdmin').checked = false;
     $('#newUserIsViewer').checked = false;
+    $('#newUserIsModernTheme').checked = false;
     await renderUserConfigTable();
     toast('User created');
   } catch (e) {
@@ -1214,7 +1579,9 @@ document.addEventListener('click', async (e) => {
   const resetUsername = e.target.getAttribute('data-reset-user');
   const toggleUsername = e.target.getAttribute('data-toggle-admin-user');
   const toggleViewerUsername = e.target.getAttribute('data-toggle-viewer-user');
-  const deleteUsername = e.target.getAttribute('data-delete-user');
+  const toggleModernUsername = e.target.getAttribute('data-toggle-modern-user');
+  const deleteUserBtn = e.target.closest && e.target.closest('[data-delete-user]');
+  const deleteUsername = deleteUserBtn ? deleteUserBtn.getAttribute('data-delete-user') : null;
   if (resetUsername) {
     $('#resetPasswordUsername').value = resetUsername;
     $('#resetPasswordUserLabel').textContent = `Setting a new password for "${resetUsername}".`;
@@ -1237,6 +1604,15 @@ document.addEventListener('click', async (e) => {
       toast('Role updated');
     } catch (err) {
       toast('Could not update role: ' + (err.message || err));
+    }
+  } else if (toggleModernUsername) {
+    const currentlyModern = e.target.getAttribute('data-current-modern') === 'true';
+    try {
+      await SupabaseClient.setModernThemeFlag(toggleModernUsername, !currentlyModern);
+      await renderUserConfigTable();
+      toast('Theme updated');
+    } catch (err) {
+      toast('Could not update theme: ' + (err.message || err));
     }
   } else if (deleteUsername) {
     let confirmed;
@@ -1863,6 +2239,7 @@ $('#quotationConfirmBtn').addEventListener('click', withErrorToast(async () => {
   Store.saveQuotation(docData);
   closeModal('quotationModal');
   renderQuotations();
+  if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId);
   toast('Quotation saved');
 }));
 
@@ -1917,11 +2294,12 @@ document.addEventListener('click', withErrorToast((e) => {
     const doc = buildQuotationPdf(q, resolveBillToCompany(q), resolveDocProfile(q));
     return sendDocumentEmail('quotation', `${q.quotationNo.replace(/\//g, '-')}.pdf`, doc);
   }
-  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-quotation');
+  const delBtn = e.target.closest && e.target.closest('[data-delete-quotation]');
+  const delId = delBtn ? delBtn.getAttribute('data-delete-quotation') : null;
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
-    if (confirm('Delete this quotation?')) { Store.deleteQuotation(delId); renderQuotations(); toast('Quotation deleted'); }
+    if (confirm('Delete this quotation?')) { Store.deleteQuotation(delId); renderQuotations(); if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId); toast('Quotation deleted'); }
   }
 }));
 
@@ -2355,6 +2733,7 @@ $('#amcQuotationConfirmBtn').addEventListener('click', withErrorToast(async () =
   Store.saveQuotation(docData);
   closeModal('amcQuotationModal');
   renderAmcQuotations();
+  if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId);
   toast('AMC Quotation saved');
 }));
 
@@ -2391,11 +2770,12 @@ document.addEventListener('click', withErrorToast((e) => {
     const doc = buildAmcQuotationPdf(q, resolveBillToCompany(q), resolveDocProfile(q));
     doc.save(`${q.quotationNo.replace(/\//g, '-')}.pdf`);
   }
-  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-amcQuotation');
+  const delBtn = e.target.closest && e.target.closest('[data-delete-amcQuotation]');
+  const delId = delBtn ? delBtn.getAttribute('data-delete-amcQuotation') : null;
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
-    if (confirm('Delete this AMC quotation?')) { Store.deleteQuotation(delId); renderAmcQuotations(); toast('AMC Quotation deleted'); }
+    if (confirm('Delete this AMC quotation?')) { Store.deleteQuotation(delId); renderAmcQuotations(); if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId); toast('AMC Quotation deleted'); }
   }
 }));
 
@@ -2641,6 +3021,7 @@ $('#invoiceConfirmBtn').addEventListener('click', withErrorToast(async () => {
   renderPayments();
   renderSalesByCompany();
   renderMissingPurchaseEntries();
+  if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId);
   toast('Invoice saved');
 }));
 
@@ -2717,11 +3098,12 @@ document.addEventListener('click', withErrorToast((e) => {
     const doc = buildInvoicePdf(inv, resolveBillToCompany(inv), resolveDocProfile(inv));
     return sendDocumentEmail('invoice', `${inv.invoiceNo.replace(/\//g, '-')}.pdf`, doc);
   }
-  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-invoice');
+  const delBtn = e.target.closest && e.target.closest('[data-delete-invoice]');
+  const delId = delBtn ? delBtn.getAttribute('data-delete-invoice') : null;
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
-    if (confirm('Delete this invoice?')) { Store.deleteInvoice(delId); renderInvoices(); renderPayments(); renderSalesByCompany(); renderMissingPurchaseEntries(); toast('Invoice deleted'); }
+    if (confirm('Delete this invoice?')) { Store.deleteInvoice(delId); renderInvoices(); renderPayments(); renderSalesByCompany(); renderMissingPurchaseEntries(); if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId); toast('Invoice deleted'); }
   }
 }));
 
@@ -3064,6 +3446,7 @@ $('#serviceReportConfirmBtn').addEventListener('click', withErrorToast(async () 
   Store.saveServiceReport(docData);
   closeModal('serviceReportModal');
   renderServiceReports();
+  if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId);
   toast('Service Report saved');
 }));
 
@@ -3124,11 +3507,12 @@ document.addEventListener('click', withErrorToast((e) => {
     const doc = buildServiceReportPdf(r, resolveBillToCompany(r), resolveDocProfile(r));
     return sendDocumentEmail('serviceReport', `${r.reportNo.replace(/\//g, '-')}.pdf`, doc);
   }
-  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-serviceReport');
+  const delBtn = e.target.closest && e.target.closest('[data-delete-serviceReport]');
+  const delId = delBtn ? delBtn.getAttribute('data-delete-serviceReport') : null;
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
-    if (confirm('Delete this service report?')) { Store.deleteServiceReport(delId); renderServiceReports(); toast('Service Report deleted'); }
+    if (confirm('Delete this service report?')) { Store.deleteServiceReport(delId); renderServiceReports(); if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId); toast('Service Report deleted'); }
   }
 }));
 
@@ -3223,6 +3607,29 @@ function purchaseRow(p) {
       <td>${fmt((Number(p.cgst) || 0) + (Number(p.sgst) || 0) + (Number(p.igst) || 0))}</td>
       <td>${fmt(p.total)}</td>
       <td>${purchasePaymentBadge(p)}</td>
+    </tr>`;
+}
+
+/* Company 360 (modern theme) only — a copy of purchaseRow() with an Actions
+   cell added, deliberately NOT folded into purchaseRow() itself since that
+   function is shared with the Reports tab's Purchases-by-Company accordion
+   (both themes), which is a deliberate "scanning view, no Actions column"
+   design. Reuses the exact data-edit-purchase/data-delete-purchase
+   attributes renderPurchases() already uses, so the existing delegated
+   handlers pick these up with no new wiring. */
+function companyDetailPurchaseRow(p) {
+  return `
+    <tr>
+      <td>${escapeHtml(p.purchaseNo)}</td>
+      <td>${fmtDateShort(p.date)}</td>
+      <td>${fmt(p.subtotal)}</td>
+      <td>${fmt((Number(p.cgst) || 0) + (Number(p.sgst) || 0) + (Number(p.igst) || 0))}</td>
+      <td>${fmt(p.total)}</td>
+      <td>${purchasePaymentBadge(p)}</td>
+      <td><div class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-purchase="${p.id}">Edit</button>
+        ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-purchase="${p.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
+      </div></td>
     </tr>`;
 }
 
@@ -3324,6 +3731,17 @@ function renderMissingPurchaseEntries() {
     </div>`;
 }
 
+/* Shared by the Reports tab's Purchases-by-Company accordion and the Company
+   360 page (modern theme) — see buildCompanyInvoiceRows() above for why. */
+function buildCompanyPurchaseRows(companyId) {
+  let list = Store.getPurchases().filter(p => p.companyId === companyId).map(p => Object.assign({}, p, {
+    _gst: (Number(p.cgst) || 0) + (Number(p.sgst) || 0) + (Number(p.igst) || 0),
+    _status: p.paymentDone ? 'Paid' : 'Unpaid',
+  }));
+  list = sortState.purchasesByCompany ? sortRows(list, 'purchasesByCompany') : list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  return list;
+}
+
 function renderPurchasesByCompany() {
   const container = $('#purchasesByCompany');
   const purchases = Store.getPurchases();
@@ -3333,11 +3751,7 @@ function renderPurchasesByCompany() {
   }
   const companies = Store.getCompanies().filter(c => c.isPurchaseCompany);
   const groups = companies.map(c => {
-    let list = purchases.filter(p => p.companyId === c.id).map(p => Object.assign({}, p, {
-      _gst: (Number(p.cgst) || 0) + (Number(p.sgst) || 0) + (Number(p.igst) || 0),
-      _status: p.paymentDone ? 'Paid' : 'Unpaid',
-    }));
-    list = sortState.purchasesByCompany ? sortRows(list, 'purchasesByCompany') : list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const list = buildCompanyPurchaseRows(c.id);
     return { company: c, purchases: list };
   }).filter(g => g.purchases.length > 0);
 
@@ -3401,6 +3815,45 @@ function salesInvoiceRow(inv) {
     </tr>`;
 }
 
+/* Company 360 (modern theme) only — a copy of salesInvoiceRow() with an
+   Actions cell added, deliberately NOT folded into salesInvoiceRow() itself
+   since that function is shared with the Reports tab's Sales-by-Company
+   accordion (both themes), a deliberate "scanning view, no Actions column"
+   design. Reuses the exact data-edit-invoice/data-duplicate-invoice/
+   data-pdf-invoice/data-email-invoice/data-delete-invoice attributes
+   renderInvoices() already uses, so the existing delegated handlers pick
+   these up with no new wiring. */
+function companyDetailInvoiceRow(inv) {
+  return `
+    <tr>
+      <td>${escapeHtml(inv.invoiceNo)}${inv.isProforma ? ' <span class="badge badge-muted">Proforma</span>' : ''}</td>
+      <td>${fmtDateShort(inv.date)}</td>
+      <td>${fmt(inv.subtotal)}</td>
+      <td>${fmt((Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0))}</td>
+      <td>${fmt(inv.total)}</td>
+      <td>${paymentStatusBadge(inv)}</td>
+      <td><div class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-invoice="${inv.id}">Edit</button>
+        <button class="btn btn-secondary btn-sm" data-duplicate-invoice="${inv.id}">Duplicate</button>
+        <button class="btn btn-secondary btn-sm" data-pdf-invoice="${inv.id}">PDF</button>
+        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-invoice="${inv.id}">Email</button>` : ''}
+        ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-invoice="${inv.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
+      </div></td>
+    </tr>`;
+}
+
+/* Shared by the Reports tab's Sales-by-Company accordion and the Company 360
+   page (modern theme) — a single source for "this company's own invoices,
+   with computed display fields, sorted" so the two never drift apart. */
+function buildCompanyInvoiceRows(companyId) {
+  let list = realInvoices().filter(inv => inv.companyId === companyId).map(inv => Object.assign({}, inv, {
+    _gst: (Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0),
+    _status: paymentStatusText(inv),
+  }));
+  list = sortState.salesByCompany ? sortRows(list, 'salesByCompany') : list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  return list;
+}
+
 function renderSalesByCompany() {
   const container = $('#salesByCompany');
   const invoices = realInvoices();
@@ -3410,11 +3863,7 @@ function renderSalesByCompany() {
   }
   const companies = Store.getCompanies().filter(c => c.isSalesCompany);
   const groups = companies.map(c => {
-    let list = invoices.filter(inv => inv.companyId === c.id).map(inv => Object.assign({}, inv, {
-      _gst: (Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0),
-      _status: paymentStatusText(inv),
-    }));
-    list = sortState.salesByCompany ? sortRows(list, 'salesByCompany') : list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const list = buildCompanyInvoiceRows(c.id);
     return { company: c, invoices: list };
   }).filter(g => g.invoices.length > 0);
 
@@ -3516,6 +3965,7 @@ $('#savePurchaseBtn').addEventListener('click', withErrorToast(async () => {
   renderPurchases();
   renderPurchasesByCompany();
   renderMissingPurchaseEntries();
+  if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId);
   toast('Purchase saved');
 }));
 
@@ -3537,11 +3987,12 @@ document.addEventListener('click', withErrorToast((e) => {
     renderLineItems('purchase');
     openModal('purchaseModal');
   }
-  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-purchase');
+  const delBtn = e.target.closest && e.target.closest('[data-delete-purchase]');
+  const delId = delBtn ? delBtn.getAttribute('data-delete-purchase') : null;
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
-    if (confirm('Delete this purchase?')) { Store.deletePurchase(delId); renderPurchases(); renderPurchasesByCompany(); renderMissingPurchaseEntries(); toast('Purchase deleted'); }
+    if (confirm('Delete this purchase?')) { Store.deletePurchase(delId); renderPurchases(); renderPurchasesByCompany(); renderMissingPurchaseEntries(); if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId); toast('Purchase deleted'); }
   }
 }));
 
@@ -3643,7 +4094,8 @@ $('#saveExpenseBtn').addEventListener('click', withErrorToast(() => {
 document.addEventListener('click', withErrorToast((e) => {
   const editId = e.target.getAttribute && e.target.getAttribute('data-edit-expense');
   if (editId) openExpenseModal(Store.getExpenses().find(x => x.id === editId));
-  const delId = e.target.getAttribute && e.target.getAttribute('data-delete-expense');
+  const delBtn = e.target.closest && e.target.closest('[data-delete-expense]');
+  const delId = delBtn ? delBtn.getAttribute('data-delete-expense') : null;
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
@@ -3759,11 +4211,12 @@ document.addEventListener('click', withErrorToast((e) => {
   if (addType) openConfigModal(addType, null);
   const editType = e.target.getAttribute && e.target.getAttribute('data-edit-config-type');
   if (editType) openConfigModal(editType, e.target.getAttribute('data-edit-config-id'));
-  const delType = e.target.getAttribute && e.target.getAttribute('data-delete-config-type');
+  const delConfigBtn = e.target.closest && e.target.closest('[data-delete-config-type]');
+  const delType = delConfigBtn ? delConfigBtn.getAttribute('data-delete-config-type') : null;
   if (delType) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
-    const delId = e.target.getAttribute('data-delete-config-id');
+    const delId = delConfigBtn.getAttribute('data-delete-config-id');
     if (confirm('Delete this entry? Existing records that used it will keep their own saved value.')) {
       CONFIG_TYPES[delType].del(delId);
       renderConfigTable(delType);
@@ -3992,6 +4445,29 @@ function computeCompanyOutstanding() {
   }).filter(r => r.invoiceCount > 0);
 }
 
+/* Mirror-image of computeCompanyOutstanding() for the purchase side — a
+   purchase has no invoiceBalance()-style partial-payment concept, just the
+   flat paymentDone boolean, so "owed" is simply the sum of unpaid purchases'
+   own totals. Used by both Company 360's stat cards and the Company tab's
+   own tiles, so a purchase company's "Outstanding" figure is never silently
+   blank just because computeCompanyOutstanding() (sales-only) has nothing
+   for it. */
+function computeCompanyPurchaseOutstanding() {
+  const companies = Store.getCompanies();
+  const purchases = Store.getPurchases();
+  return companies.map(c => {
+    const pur = purchases.filter(p => p.companyId === c.id);
+    let owed = 0, unpaidCount = 0;
+    pur.forEach(p => {
+      if (!p.paymentDone) {
+        owed += Number(p.total) || 0;
+        unpaidCount++;
+      }
+    });
+    return { company: c, purchaseCount: pur.length, unpaidCount, owed };
+  }).filter(r => r.purchaseCount > 0);
+}
+
 function renderSummaryOutstanding() {
   const tbody = $('#summaryOutstandingTbody');
   let rows = computeCompanyOutstanding().map(r => Object.assign({}, r, { _companyName: r.company.name }));
@@ -3999,6 +4475,7 @@ function renderSummaryOutstanding() {
   if (!rows.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No invoices yet.</td></tr>`;
     updateSortIndicators('summaryOutstanding');
+    if (isModernThemeActive) renderSummaryOutstandingTiles();
     return;
   }
   tbody.innerHTML = rows.map(r => `
@@ -4012,6 +4489,49 @@ function renderSummaryOutstanding() {
     </tr>
   `).join('');
   updateSortIndicators('summaryOutstanding');
+  if (isModernThemeActive) renderSummaryOutstandingTiles();
+}
+
+/* Modern-theme-only tile grid for Summary's Outstanding-by-Company, scoped to
+   Sales Companies only and sorted by Amount Owed desc, Expected Payment Date
+   asc as the tiebreak — a distinct view from the classic table above, not fed
+   by sortState.summaryOutstanding (which is a user-driven column sort for the
+   table only). */
+function renderSummaryOutstandingTiles() {
+  const grid = $('#summaryOutstandingTileGrid');
+  const rows = computeCompanyOutstanding()
+    .filter(r => r.company.isSalesCompany)
+    .sort((a, b) => {
+      if (b.owed !== a.owed) return b.owed - a.owed;
+      if (!a.expectedDate) return 1;
+      if (!b.expectedDate) return -1;
+      return new Date(a.expectedDate) - new Date(b.expectedDate);
+    });
+  if (!rows.length) {
+    grid.innerHTML = `<div class="card" style="padding:30px; text-align:center; color:var(--text-muted);">No sales companies with invoices yet.</div>`;
+    return;
+  }
+  grid.innerHTML = rows.map(r => `
+    <div class="card company-tile" data-open-company="${r.company.id}">
+      <div class="tile-top">
+        <div class="avatar">${escapeHtml((r.company.name || '?').trim().slice(0, 2).toUpperCase())}</div>
+        <div>
+          <p class="tile-name">${escapeHtml(r.company.name)}</p>
+          <div class="tile-addr">${r.unpaidCount} unpaid invoice${r.unpaidCount === 1 ? '' : 's'}</div>
+        </div>
+      </div>
+      <div class="tile-stats">
+        <div class="stat-chip ${r.owed > 0.009 ? 'owed' : 'clear'}">
+          <span class="num">${r.owed > 0.009 ? fmt(r.owed) : 'All paid'}</span>
+          <span class="label">Amount Owed</span>
+        </div>
+        <div class="stat-chip neutral">
+          <span class="num">${r.expectedDate ? fmtDateShort(r.expectedDate) : '-'}</span>
+          <span class="label">Expected Payment</span>
+        </div>
+      </div>
+    </div>
+  `).join('');
 }
 
 let summaryPeriodMode = 'annual';
@@ -4080,7 +4600,6 @@ $('#summaryMonthlyBtn').addEventListener('click', () => {
 
 function renderSummary() {
   renderSummaryOutstanding();
-  renderSummarySales();
 }
 
 /* =====================================================================
@@ -5171,6 +5690,8 @@ async function handleLoginSubmit() {
     document.body.classList.toggle('viewer-mode', !!currentUser.isViewer);
     Store.setDeleteRestricted(!currentUser.isAdmin);
     document.body.classList.toggle('non-admin', !currentUser.isAdmin);
+    isModernThemeActive = !!currentUser.isModernTheme;
+    document.body.classList.toggle('theme-modern', isModernThemeActive);
     $('#loginGateOverlay').style.display = 'none';
     const resolve = pendingLoginResolve;
     pendingLoginResolve = null;

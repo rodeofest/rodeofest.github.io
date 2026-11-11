@@ -526,6 +526,127 @@ function buildAmcQuotationPdf(quotation, company, profile) {
   return doc;
 }
 
+/* Complex Quotation: a copy of buildAmcQuotationPdf (same main table, totals,
+   Terms and Consumable Rates appendix) with an extra block between Terms and
+   Consumables — an optional section Heading, any number of tables each with
+   their own centered Heading, then an optional Note. The block starts on a
+   fresh page (when it has any content), the Consumable Rates block still
+   starts on its own page after it. */
+function buildComplexQuotationPdf(quotation, company, profile) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const headerOpts = {
+    docTitle: 'QUOTATION',
+    docNo: quotation.quotationNo,
+    docDate: quotation.date,
+    noLabel: 'Quote No:',
+    dateLabel: 'Quote Date:',
+    toLabel: 'To:',
+  };
+  let y = drawHeader(doc, profile, company, headerOpts);
+  const repeatHeaderHeight = drawHeader(doc, profile, company, headerOpts, true, false);
+  const contentWidth = pageWidth - PAGE_MARGIN * 2;
+  const tableOpts = () => ({
+    margin: { left: PAGE_MARGIN, right: PAGE_MARGIN, top: repeatHeaderHeight },
+    styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
+    headStyles: { fillColor: [40, 55, 90] },
+    bodyStyles: { fontSize: 9, textColor: [0, 0, 0] },
+    didDrawPage: (data) => { if (data.pageNumber > 1) drawHeader(doc, profile, company, headerOpts, false, false); },
+  });
+  const drawCenteredHeading = (text, size) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(size);
+    doc.setTextColor(0);
+    const lines = doc.splitTextToSize(text, contentWidth);
+    doc.text(lines, pageWidth / 2, y, { align: 'center' });
+    y += lines.length * 5 + 4;
+  };
+
+  if (quotation.heading) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(0);
+    const headingLines = doc.splitTextToSize(quotation.heading, contentWidth);
+    if (y + headingLines.length * 5 > pageHeight - 20) { y = startNewPage(doc, profile, company, headerOpts); }
+    doc.text(headingLines, pageWidth / 2, y, { align: 'center' });
+    y += headingLines.length * 5 + 4;
+  }
+
+  doc.autoTable(Object.assign({
+    startY: y,
+    head: [['#', 'Product', 'Rate']],
+    body: buildAmcItemRows(quotation.items),
+    columnStyles: { 0: { cellWidth: 8 }, 1: { cellWidth: 52 } },
+  }, tableOpts()));
+
+  y = doc.lastAutoTable.finalY + 8;
+  y = drawTotalsBlock(doc, y, quotation, quotation.displayOptions);
+
+  if (quotation.terms && quotation.terms.length) {
+    if (y > pageHeight - 55) { y = startNewPage(doc, profile, company, headerOpts); }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(0);
+    doc.text('Terms & Conditions', PAGE_MARGIN, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    quotation.terms.forEach((term, idx) => {
+      const lines = doc.splitTextToSize(`${idx + 1}. ${term}`, contentWidth);
+      if (y + lines.length * 4.5 > pageHeight - 20) { y = startNewPage(doc, profile, company, headerOpts); }
+      doc.text(lines, PAGE_MARGIN, y);
+      y += lines.length * 4.5 + 1;
+    });
+  }
+
+  const tables = (quotation.tables || []).filter(t => t.data && t.data.length);
+  const note = (quotation.note || '').trim();
+  if (quotation.sectionHeading || tables.length || note) {
+    y = startNewPage(doc, profile, company, headerOpts);
+    if (quotation.sectionHeading) drawCenteredHeading(quotation.sectionHeading, 12);
+
+    tables.forEach((t) => {
+      if (t.heading) {
+        if (y > pageHeight - 40) { y = startNewPage(doc, profile, company, headerOpts); }
+        drawCenteredHeading(t.heading, 11);
+      }
+      const hasHeader = !!t.hasHeader;
+      doc.autoTable(Object.assign({
+        startY: y,
+        head: hasHeader ? [t.data[0]] : [],
+        body: hasHeader ? t.data.slice(1) : t.data,
+      }, tableOpts()));
+      y = doc.lastAutoTable.finalY + 8;
+    });
+
+    if (note) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(0);
+      doc.splitTextToSize(note, contentWidth).forEach((line) => {
+        if (y + 4.5 > pageHeight - 20) { y = startNewPage(doc, profile, company, headerOpts); doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(0); }
+        doc.text(line, PAGE_MARGIN, y);
+        y += 4.5;
+      });
+    }
+  }
+
+  y = startNewPage(doc, profile, company, headerOpts);
+  drawCenteredHeading(quotation.consumableHeading || 'Consumable Rates', 12);
+
+  doc.autoTable(Object.assign({
+    startY: y,
+    head: [['#', 'Product', 'Qty', 'Rate']],
+    body: buildAmcConsumableRows(quotation.consumables || []),
+    columnStyles: { 0: { cellWidth: 8 }, 1: { cellWidth: 52 } },
+  }, tableOpts()));
+
+  drawFooter(doc, profile);
+  return doc;
+}
+
 function buildInvoicePdf(invoice, company, profile) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();

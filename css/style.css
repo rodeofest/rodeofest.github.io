@@ -242,6 +242,36 @@ tbody tr:hover { background: #fafbff; }
 .actions-cell { display: flex; gap: 6px; white-space: nowrap; }
 .empty-row td { text-align: center; color: var(--text-muted); padding: 30px; }
 
+.btn-more { font-weight: 700; line-height: 1; padding: 5px 9px; }
+.row-more-menu {
+  display: none;
+  position: fixed;
+  z-index: 400;
+  min-width: 170px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+  flex-direction: column;
+}
+.row-more-menu.open { display: flex; }
+.row-more-menu button {
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--text);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.row-more-menu button:hover { background: #eef1f8; }
+.row-more-menu button.danger { color: var(--danger, #c0392b); }
+body.viewer-mode .row-more-menu button[data-add-purchase-invoice],
+body.viewer-mode .row-more-menu button.danger { opacity: 0.45; pointer-events: none; }
+
 .badge { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; }
 .badge-success { background: #e6f7ee; color: var(--success); }
 .badge-warning { background: #fff6e0; color: var(--warning); }
@@ -505,6 +535,7 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 14px;
 }
+#summaryPendingStats { margin-bottom: 24px; }
 .stat-card {
   background: var(--card-bg);
   border: 1px solid var(--border);
@@ -561,7 +592,8 @@ thead th.sortable.sort-desc::after { content: '\2193'; opacity: 1; color: var(--
    nothing forces a reflow before .card's overflow-x kicks in. Keeping every
    cell in this section's tables on one line forces the same scroll-not-wrap
    behavior here too. */
-#missingPurchaseEntries td, #missingPurchaseEntries th { white-space: nowrap; }
+#missingPurchaseEntries td, #missingPurchaseEntries th,
+#missingInvoiceEntries td, #missingInvoiceEntries th { white-space: nowrap; }
 
 .tab-layout-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
 .tab-layout-table th, .tab-layout-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; font-size: 13px; }

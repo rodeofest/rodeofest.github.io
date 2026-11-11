@@ -143,6 +143,7 @@
   <button class="tab-btn sub" data-tab="payments">Payments</button>
   <button class="tab-btn sub" data-tab="serviceReports">Service Reports</button>
   <button class="tab-btn sub" data-tab="amcQuotations">AMC Quotation</button>
+  <button class="tab-btn sub" data-tab="complexQuotations">Complex Quotation</button>
 </nav>
 
 <nav class="tabs tabs-sub" id="subnav-charts">
@@ -158,6 +159,7 @@
      whichever .tabs-sub is currently a popover (see setGroupExpanded() in
      js/app.js). Hidden outright outside that context. -->
 <div class="mobile-nav-scrim" id="mobileNavScrim"></div>
+<div class="row-more-menu" id="rowMoreMenu" role="menu"></div>
 
 <!-- ===================== PRODUCTS ===================== -->
 <section class="tab-panel" id="tab-products">
@@ -287,6 +289,11 @@
   <div id="missingPurchaseEntries"></div>
 
   <div class="panel-header" style="margin-top:28px;">
+    <h3 style="margin:0;">Products Possibly Missing Invoice Entries</h3>
+  </div>
+  <div id="missingInvoiceEntries"></div>
+
+  <div class="panel-header" style="margin-top:28px;">
     <h2>Cash / Manual Expenses</h2>
     <button class="btn btn-primary" id="btnAddExpense">+ Add Expense</button>
   </div>
@@ -356,6 +363,28 @@
   </div>
 </section>
 
+<!-- ===================== COMPLEX QUOTATIONS ===================== -->
+<section class="tab-panel" id="tab-complexQuotations">
+  <div class="panel-header">
+    <h2>Complex Quotation</h2>
+    <button class="btn btn-primary" id="btnAddComplexQuotation">+ Create Complex Quotation</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th class="sortable" data-sort-table="complexQuotations" data-sort-key="quotationNo" data-sort-type="text">Quotation No</th>
+          <th class="sortable" data-sort-table="complexQuotations" data-sort-key="date" data-sort-type="date">Date</th>
+          <th class="sortable" data-sort-table="complexQuotations" data-sort-key="_companyName" data-sort-type="text">Company</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="complexQuotationsTbody"></tbody>
+    </table>
+    <div class="table-pagination" id="complexQuotationsPagination"></div>
+  </div>
+</section>
+
 <!-- ===================== INVOICES ===================== -->
 <section class="tab-panel" id="tab-invoices">
   <div class="panel-header">
@@ -415,6 +444,8 @@
 <!-- ===================== SUMMARY ===================== -->
 <section class="tab-panel active" id="tab-summary">
   <div class="panel-header"><h2>Summary</h2></div>
+
+  <div class="stat-cards" id="summaryPendingStats"></div>
 
   <div class="card" id="summaryOutstandingTableCard" style="padding:18px; margin-bottom:24px;">
     <h3 style="margin-top:0;">Outstanding by Company</h3>
@@ -732,6 +763,11 @@
               <label><input type="checkbox" id="productExcludePurchaseCheck"> This product doesn't need a Purchase entry (exclude from "Missing Purchase Entries" check)</label>
             </div>
           </div>
+          <div class="form-field span-2">
+            <div class="checkbox-row">
+              <label><input type="checkbox" id="productExcludeInvoiceCheck"> This product doesn't need an Invoice entry, e.g. raw material/stock (exclude from "Missing Invoice Entries" check)</label>
+            </div>
+          </div>
         </div>
       </form>
     </div>
@@ -976,6 +1012,140 @@
       <button class="btn btn-secondary" id="amcQuotationDownloadBtn" style="display:none;">PDF</button>
       <button class="btn btn-primary" id="amcQuotationNextBtn">Next: Preview</button>
       <button class="btn btn-primary" id="amcQuotationConfirmBtn" data-mutating style="display:none;">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== COMPLEX QUOTATION MODAL (two-step) ===================== -->
+<div class="modal-overlay" id="complexQuotationModal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3>Create Complex Quotation</h3>
+      <button class="modal-close" data-close="complexQuotationModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="step-indicator">
+        <span class="step active" id="complexQuotationStepLabel1">1. Details</span>
+        <span>&rsaquo;</span>
+        <span class="step" id="complexQuotationStepLabel2">2. Preview</span>
+      </div>
+
+      <!-- Step 1: form -->
+      <div id="complexQuotationStepForm">
+        <input type="hidden" id="complexQuotationId">
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="complexQuotationCompany">Company</label>
+            <select id="complexQuotationCompany" required></select>
+          </div>
+          <div class="form-field">
+            <label for="complexQuotationDate">Date</label>
+            <input type="date" id="complexQuotationDate" required>
+          </div>
+        </div>
+
+        <div class="form-field" style="margin-top:14px;">
+          <label for="complexQuotationHeading">Heading (optional, bold &amp; centered)</label>
+          <input type="text" id="complexQuotationHeading" placeholder="Prints bold and centered below the To section">
+        </div>
+
+        <div class="form-grid" style="margin-top:14px;">
+          <div class="form-field">
+            <label for="complexQuotationProductPicker">Add Product</label>
+            <select id="complexQuotationProductPicker"></select>
+          </div>
+          <div class="form-field" style="justify-content:flex-end;">
+            <button type="button" class="btn btn-secondary" id="complexQuotationAddLineBtn">+ Add Line Item</button>
+          </div>
+        </div>
+
+        <table class="line-items-table" id="complexQuotationLineItemsTable">
+          <thead>
+            <tr><th class="product-col">Product</th><th class="num-col">Rate</th><th></th></tr>
+          </thead>
+          <tbody id="complexQuotationLineItemsBody"></tbody>
+        </table>
+
+        <div class="totals-box" id="complexQuotationTotalsBox"></div>
+
+        <div class="display-options">
+          <span class="display-options-label">Show on Complex Quotation:</span>
+          <label><input type="checkbox" id="complexQuotationShowSubtotal"> Subtotal</label>
+          <label><input type="checkbox" id="complexQuotationShowTax"> Tax (CGST/SGST/IGST)</label>
+          <label><input type="checkbox" id="complexQuotationShowGrandTotal"> Grand Total</label>
+        </div>
+
+        <div style="margin-top:18px;">
+          <label>Terms &amp; Conditions</label>
+          <table class="line-items-table" id="complexQuotationTermsTable">
+            <thead>
+              <tr><th style="width:30px;">#</th><th>Term</th><th></th></tr>
+            </thead>
+            <tbody id="complexQuotationTermsBody"></tbody>
+          </table>
+          <button type="button" class="btn btn-secondary" id="complexQuotationAddTermBtn">+ Add Term</button>
+        </div>
+
+        <div style="margin-top:18px;">
+          <div class="form-field">
+            <label for="complexQuotationSectionHeading">Section Heading (optional — bold &amp; centered, starts on a new page)</label>
+            <input type="text" id="complexQuotationSectionHeading" placeholder="Prints bold and centered at the top of a new page">
+          </div>
+        </div>
+
+        <div class="form-field" style="margin-top:14px;">
+          <label>Tables</label>
+          <div class="free-table-new-row">
+            <label>Rows <input type="number" id="complexQuotationNewTableRows" min="1" max="50" value="2"></label>
+            <label>Columns <input type="number" id="complexQuotationNewTableCols" min="1" max="20" value="2"></label>
+            <label><input type="checkbox" id="complexQuotationNewTableHeader"> Header Row</label>
+            <button type="button" class="btn btn-secondary" id="complexQuotationAddTableBtn">+ Add Table</button>
+          </div>
+          <div id="complexQuotationTablesContainer"></div>
+        </div>
+
+        <div class="form-field" style="margin-top:14px;">
+          <label for="complexQuotationNote">Note (optional)</label>
+          <textarea id="complexQuotationNote" rows="4" placeholder="Prints below the tables"></textarea>
+        </div>
+
+        <div style="margin-top:18px;">
+          <div class="form-field">
+            <label for="complexQuotationConsumableHeading">Consumable Rates — Heading (bold &amp; centered, own page)</label>
+            <input type="text" id="complexQuotationConsumableHeading" placeholder="Consumable Rates">
+          </div>
+        </div>
+
+        <div class="form-grid" style="margin-top:14px;">
+          <div class="form-field">
+            <label for="complexQuotationConsumableProductPicker">Add Product</label>
+            <select id="complexQuotationConsumableProductPicker"></select>
+          </div>
+          <div class="form-field" style="justify-content:flex-end;">
+            <button type="button" class="btn btn-secondary" id="complexQuotationConsumableAddLineBtn">+ Add Line Item</button>
+          </div>
+        </div>
+
+        <table class="line-items-table" id="complexQuotationConsumablesTable">
+          <thead>
+            <tr><th class="product-col">Product</th><th class="num-col">Qty</th><th class="num-col">Rate</th><th></th></tr>
+          </thead>
+          <tbody id="complexQuotationConsumablesBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Step 2: preview -->
+      <div id="complexQuotationStepPreview" style="display:none;">
+        <div class="doc-preview" id="complexQuotationPreviewContent"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="complexQuotationModal">Cancel</button>
+      <span class="spacer"></span>
+      <button class="btn btn-secondary" id="complexQuotationEditBtn" style="display:none;">Edit</button>
+      <button class="btn btn-secondary" id="complexQuotationDownloadBtn" style="display:none;">PDF</button>
+      <button class="btn btn-primary" id="complexQuotationNextBtn">Next: Preview</button>
+      <button class="btn btn-primary" id="complexQuotationConfirmBtn" data-mutating style="display:none;">Confirm</button>
     </div>
   </div>
 </div>

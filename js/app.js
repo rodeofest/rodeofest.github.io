@@ -17,6 +17,7 @@ let isModernThemeActive = false;
    dispatch/tabGroups/Tab Layout — it's a record drilldown, reached only by
    clicking a company tile/row, not a 7th configurable nav tab. */
 let openCompanyDetailId = null;
+let companyDetailReturnTab = 'companies';
 
 /* Called as the first line of every handler that mutates business data — the real
    enforcement for the view-only role (js/storage.js's writeList/writeObject throwing
@@ -101,7 +102,7 @@ document.addEventListener('click', (e) => {
 });
 
 /* ---------------- Tabs (two-level: primary + Sales/Financials sub-navs) ---------------- */
-const tabGroups = { sales: ['quotations', 'invoices', 'payments', 'serviceReports', 'amcQuotations'], financials: ['summary', 'pnl', 'gst'], charts: ['companySalesChart', 'productSalesChart', 'pendingPaymentsChart', 'purchaseCompanyChart', 'expenseCategoryChart', 'reports'] };
+const tabGroups = { sales: ['quotations', 'invoices', 'payments', 'serviceReports', 'amcQuotations', 'complexQuotations'], financials: ['summary', 'pnl', 'gst'], charts: ['companySalesChart', 'productSalesChart', 'pendingPaymentsChart', 'purchaseCompanyChart', 'expenseCategoryChart', 'reports'] };
 const lastSubTab = { sales: 'quotations', financials: 'summary', charts: 'companySalesChart' };
 
 /* Admin-configurable tab layout (Settings > Tab Layout) — which of the 6
@@ -169,6 +170,7 @@ const TAB_LAZY_KEYS = {
   companies: [STORAGE_KEYS.companies, STORAGE_KEYS.invoices, STORAGE_KEYS.purchases],
   quotations: [STORAGE_KEYS.quotations, STORAGE_KEYS.companies],
   amcQuotations: [STORAGE_KEYS.quotations, STORAGE_KEYS.companies],
+  complexQuotations: [STORAGE_KEYS.quotations, STORAGE_KEYS.companies],
   invoices: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
   payments: [STORAGE_KEYS.invoices, STORAGE_KEYS.companies],
   serviceReports: [STORAGE_KEYS.serviceReports, STORAGE_KEYS.companies],
@@ -201,6 +203,7 @@ const TAB_LOADING_TARGET = {
   companies: { selector: '#companiesTbody', colspan: 6 },
   quotations: { selector: '#quotationsTbody', colspan: 4 },
   amcQuotations: { selector: '#amcQuotationsTbody', colspan: 4 },
+  complexQuotations: { selector: '#complexQuotationsTbody', colspan: 4 },
   invoices: { selector: '#invoicesTbody', colspan: 9 },
   serviceReports: { selector: '#serviceReportsTbody', colspan: 5 },
   purchases: { selector: '#purchasesTbody', colspan: 9 },
@@ -246,10 +249,11 @@ async function activateTab(tabId) {
   if (tabId === 'companies') renderCompanies();
   if (tabId === 'quotations') renderQuotations();
   if (tabId === 'amcQuotations') renderAmcQuotations();
+  if (tabId === 'complexQuotations') renderComplexQuotations();
   if (tabId === 'invoices') renderInvoices();
   if (tabId === 'payments') renderPayments();
   if (tabId === 'serviceReports') renderServiceReports();
-  if (tabId === 'purchases') { renderPurchases(); renderExpenses(); renderMissingPurchaseEntries(); }
+  if (tabId === 'purchases') { renderPurchases(); renderExpenses(); renderMissingPurchaseEntries(); renderMissingInvoiceEntries(); }
   if (tabId === 'summary') renderSummary();
   if (tabId === 'pnl') { renderProfitLoss(); renderSummarySales(); }
   if (tabId === 'gst') renderGstPayment();
@@ -539,6 +543,7 @@ const SORT_RENDER_FNS = {};
    table without a sortState entry uses. */
 sortState.quotations = { key: 'quotationNo', dir: 'desc', type: 'text' };
 sortState.amcQuotations = { key: 'quotationNo', dir: 'desc', type: 'text' };
+sortState.complexQuotations = { key: 'quotationNo', dir: 'desc', type: 'text' };
 sortState.invoices = { key: 'invoiceNo', dir: 'desc', type: 'text' };
 sortState.purchases = { key: 'purchaseNo', dir: 'desc', type: 'text' };
 sortState.serviceReports = { key: 'reportNo', dir: 'desc', type: 'text' };
@@ -780,6 +785,7 @@ function openProductModal(product) {
   const defaultGstRate = Store.getGstRates().find(r => r.value === 18) || Store.getGstRates()[0];
   populateGstRateOptions($('#productGst'), product ? product.gstPercent : (defaultGstRate ? defaultGstRate.value : undefined));
   $('#productExcludePurchaseCheck').checked = product ? !!product.excludeFromPurchaseCheck : false;
+  $('#productExcludeInvoiceCheck').checked = product ? !!product.excludeFromInvoiceCheck : false;
   openModal('productModal');
 }
 
@@ -805,10 +811,13 @@ $('#saveProductBtn').addEventListener('click', withErrorToast(() => {
     rate: Number($('#productRate').value),
     gstPercent: Number($('#productGst').value),
     excludeFromPurchaseCheck: $('#productExcludePurchaseCheck').checked,
+    excludeFromInvoiceCheck: $('#productExcludeInvoiceCheck').checked,
   };
   Store.saveProduct(product);
   closeModal('productModal');
   renderProducts();
+  renderMissingPurchaseEntries();
+  renderMissingInvoiceEntries();
   toast('Product saved');
 }));
 
@@ -1011,11 +1020,15 @@ function renderCompanyTiles(companies) {
 
 document.addEventListener('click', (e) => {
   const tile = e.target.closest && e.target.closest('[data-open-company]');
-  if (tile) openCompanyDetail(tile.getAttribute('data-open-company'));
+  if (tile) {
+    companyDetailReturnTab = currentTabId === 'summary' ? 'summary' : 'companies';
+    openCompanyDetail(tile.getAttribute('data-open-company'));
+  }
 });
 
 async function openCompanyDetail(companyId) {
   openCompanyDetailId = companyId;
+  $('#companyDetailBackBtn').innerHTML = companyDetailReturnTab === 'summary' ? '&larr; Back to Summary' : '&larr; Back to Companies';
   $$('.tab-panel').forEach(p => p.classList.remove('active'));
   $('#tab-companyDetail').classList.add('active');
   $('#companyDetailSections').innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:30px;">Loading…</div>';
@@ -1027,7 +1040,7 @@ async function openCompanyDetail(companyId) {
   renderCompanyDetail(companyId);
 }
 
-$('#companyDetailBackBtn').addEventListener('click', () => { openCompanyDetailId = null; activateTab('companies'); });
+$('#companyDetailBackBtn').addEventListener('click', () => { openCompanyDetailId = null; activateTab(companyDetailReturnTab); });
 
 function companyHistorySectionHtml(title, rows, columns, emptyLabel) {
   if (!rows.length) {
@@ -1087,7 +1100,8 @@ function renderCompanyDetail(companyId) {
         <button type="button" data-create-doc="invoice">Invoice</button>
         <button type="button" data-create-doc="quotation">Quotation</button>
         <button type="button" data-create-doc="serviceReport">Service Report</button>
-        <button type="button" data-create-doc="amcQuotation">AMC Quotation</button>` : ''}
+        <button type="button" data-create-doc="amcQuotation">AMC Quotation</button>
+        <button type="button" data-create-doc="complexQuotation">Complex Quotation</button>` : ''}
         ${c.isPurchaseCompany ? `<button type="button" data-create-doc="purchase">Purchase</button>` : ''}
       </div>
     </div>` : '';
@@ -1098,7 +1112,7 @@ function renderCompanyDetail(companyId) {
       buildCompanyInvoiceRows(companyId).map(companyDetailInvoiceRow).join(''),
       ['Invoice No', 'Date', 'Subtotal', 'GST', 'Total', 'Status', 'Actions'], 'No invoices yet.'));
     sections.push(companyHistorySectionHtml('Quote History',
-      Store.getQuotations().filter(q => q.companyId === companyId && !q.isAMC)
+      Store.getQuotations().filter(q => q.companyId === companyId && !q.isAMC && !q.isComplex)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
         .map(q => `<tr><td>${escapeHtml(q.quotationNo)}</td><td>${fmtDateShort(q.date)}</td><td><div class="actions-cell">
           <button class="btn btn-secondary btn-sm" data-edit-quotation="${q.id}">Edit</button>
@@ -1113,10 +1127,23 @@ function renderCompanyDetail(companyId) {
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
         .map(q => `<tr><td>${escapeHtml(q.quotationNo)}</td><td>${fmtDateShort(q.date)}</td><td><div class="actions-cell">
           <button class="btn btn-secondary btn-sm" data-edit-amcQuotation="${q.id}">Edit</button>
+          <button class="btn btn-secondary btn-sm" data-duplicate-amcQuotation="${q.id}">Duplicate</button>
           <button class="btn btn-secondary btn-sm" data-pdf-amcQuotation="${q.id}">PDF</button>
+          ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-amcQuotation="${q.id}">Email</button>` : ''}
           ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-amcQuotation="${q.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
         </div></td></tr>`).join(''),
       ['Quotation No', 'Date', 'Actions'], 'No AMC quotations yet.'));
+    sections.push(companyHistorySectionHtml('Complex Quotation History',
+      Store.getQuotations().filter(q => q.companyId === companyId && q.isComplex)
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .map(q => `<tr><td>${escapeHtml(q.quotationNo)}</td><td>${fmtDateShort(q.date)}</td><td><div class="actions-cell">
+          <button class="btn btn-secondary btn-sm" data-edit-complexQuotation="${q.id}">Edit</button>
+          <button class="btn btn-secondary btn-sm" data-duplicate-complexQuotation="${q.id}">Duplicate</button>
+          <button class="btn btn-secondary btn-sm" data-pdf-complexQuotation="${q.id}">PDF</button>
+          ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-complexQuotation="${q.id}">Email</button>` : ''}
+          ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-complexQuotation="${q.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
+        </div></td></tr>`).join(''),
+      ['Quotation No', 'Date', 'Actions'], 'No complex quotations yet.'));
     sections.push(companyHistorySectionHtml('Service Report History',
       Store.getServiceReports().filter(r => r.companyId === companyId)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -1171,6 +1198,12 @@ document.addEventListener('click', (e) => {
     $('#amcQuotationCompany').value = companyId;
     renderAmcLineItems();
     openModal('amcQuotationModal');
+  } else if (createKind === 'complexQuotation') {
+    resetComplexQuotationModal();
+    populateCompanyDropdowns({ complexQuotation: companyId });
+    $('#complexQuotationCompany').value = companyId;
+    renderComplexLineItems();
+    openModal('complexQuotationModal');
   } else if (createKind === 'purchase') {
     resetPurchaseModal();
     populateCompanyDropdowns({ purchase: companyId });
@@ -1755,6 +1788,7 @@ function populateCompanyDropdowns(preserveIds) {
   }
   buildSelect($('#quotationCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.quotation);
   buildSelect($('#amcQuotationCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.amcQuotation);
+  buildSelect($('#complexQuotationCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.complexQuotation);
   buildSelect($('#invoiceCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.invoice);
   buildSelect($('#purchaseCompany'), c => c.isPurchaseCompany, '-- Select Purchase Company --', preserveIds.purchase);
   buildSelect($('#serviceReportCompany'), c => c.isSalesCompany, '-- Select Company --', preserveIds.serviceReport);
@@ -1769,7 +1803,7 @@ function populateProductPicker(selectEl) {
 /* =====================================================================
    Quotation / Invoice shared line-item + totals engine
 ===================================================================== */
-const draft = { quotation: { items: [] }, invoice: { items: [] }, purchase: { items: [] }, serviceReport: { tables: [], notes: [] }, amcQuotation: { items: [], consumables: [], terms: [] } };
+const draft = { quotation: { items: [] }, invoice: { items: [] }, purchase: { items: [] }, serviceReport: { tables: [], notes: [] }, amcQuotation: { items: [], consumables: [], terms: [] }, complexQuotation: { items: [], consumables: [], terms: [], tables: [] } };
 
 function companiesStoreForKind(kind) {
   const companies = Store.getCompanies();
@@ -1903,7 +1937,7 @@ function renderTotalsBox(kind) {
 ===================================================================== */
 function renderQuotations() {
   const tbody = $('#quotationsTbody');
-  let quotations = Store.getQuotations().filter(q => !q.isAMC).map(q => Object.assign({}, q, { _companyName: companyName(q.companyId) }));
+  let quotations = Store.getQuotations().filter(q => !q.isAMC && !q.isComplex).map(q => Object.assign({}, q, { _companyName: companyName(q.companyId) }));
   quotations = sortState.quotations ? sortRows(quotations, 'quotations') : quotations.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   if (!quotations.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="4">No quotations yet.</td></tr>`;
@@ -2352,7 +2386,9 @@ function renderAmcQuotations() {
       <td>${escapeHtml(q._companyName)}</td>
       <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm" data-edit-amcQuotation="${q.id}">Edit</button>
+        <button class="btn btn-secondary btn-sm" data-duplicate-amcQuotation="${q.id}">Duplicate</button>
         <button class="btn btn-secondary btn-sm" data-pdf-amcQuotation="${q.id}">PDF</button>
+        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-amcQuotation="${q.id}">Email</button>` : ''}
         ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-amcQuotation="${q.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
       </div></td>
     </tr>
@@ -2737,16 +2773,19 @@ $('#amcQuotationConfirmBtn').addEventListener('click', withErrorToast(async () =
   toast('AMC Quotation saved');
 }));
 
-document.addEventListener('click', withErrorToast((e) => {
-  const editId = e.target.getAttribute && e.target.getAttribute('data-edit-amcQuotation');
-  if (editId) {
-    const q = Store.getQuotations().find(x => x.id === editId);
+/* Edit and Duplicate share this loader. Duplicate leaves #amcQuotationId blank,
+   so the existing Confirm flow saves a brand-new record and
+   getAmcQuotationNoForDraft() hands out the next QTN- number — same trick as
+   the regular Quotation/Invoice/Service Report Duplicate. Everything else
+   (heading, items, terms, consumables, display options) carries over. */
+function loadAmcQuotationIntoModal(q, asDuplicate) {
+  {
     draft.amcQuotation = {
       items: JSON.parse(JSON.stringify(q.items || [])),
       consumables: JSON.parse(JSON.stringify(q.consumables || [])),
       terms: JSON.parse(JSON.stringify(q.terms || [])),
     };
-    $('#amcQuotationId').value = q.id;
+    $('#amcQuotationId').value = asDuplicate ? '' : q.id;
     $('#amcQuotationDate').value = q.date;
     $('#amcQuotationHeading').value = q.heading || '';
     $('#amcQuotationConsumableHeading').value = q.consumableHeading || 'Consumable Rates';
@@ -2764,11 +2803,25 @@ document.addEventListener('click', withErrorToast((e) => {
     showAmcQuotationStep('form');
     openModal('amcQuotationModal');
   }
+}
+
+document.addEventListener('click', withErrorToast((e) => {
+  const editId = e.target.getAttribute && e.target.getAttribute('data-edit-amcQuotation');
+  if (editId) loadAmcQuotationIntoModal(Store.getQuotations().find(x => x.id === editId), false);
+  const duplicateId = e.target.getAttribute && e.target.getAttribute('data-duplicate-amcQuotation');
+  if (duplicateId) loadAmcQuotationIntoModal(Store.getQuotations().find(x => x.id === duplicateId), true);
   const pdfId = e.target.getAttribute && e.target.getAttribute('data-pdf-amcQuotation');
   if (pdfId) {
     const q = Store.getQuotations().find(x => x.id === pdfId);
     const doc = buildAmcQuotationPdf(q, resolveBillToCompany(q), resolveDocProfile(q));
     doc.save(`${q.quotationNo.replace(/\//g, '-')}.pdf`);
+  }
+  const emailId = e.target.getAttribute && e.target.getAttribute('data-email-amcQuotation');
+  if (emailId) {
+    const q = Store.getQuotations().find(x => x.id === emailId);
+    const doc = buildAmcQuotationPdf(q, resolveBillToCompany(q), resolveDocProfile(q));
+    // No AMC-specific Email Template exists; AMC reuses the Quotation Subject/Body.
+    return sendDocumentEmail('quotation', `${q.quotationNo.replace(/\//g, '-')}.pdf`, doc);
   }
   const delBtn = e.target.closest && e.target.closest('[data-delete-amcQuotation]');
   const delId = delBtn ? delBtn.getAttribute('data-delete-amcQuotation') : null;
@@ -2776,6 +2829,578 @@ document.addEventListener('click', withErrorToast((e) => {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
     if (confirm('Delete this AMC quotation?')) { Store.deleteQuotation(delId); renderAmcQuotations(); if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId); toast('AMC Quotation deleted'); }
+  }
+}));
+
+/* =====================================================================
+   COMPLEX QUOTATION
+   A separate copy of the AMC Quotation implementation above (kind
+   'complexQuotation', flag isComplex, ids complexQuotation*, attributes
+   data-cx-*), deliberately not a parameterized AMC so AMC's code paths stay
+   untouched. Same storage (the shared quotations array, shared QTN-
+   sequence), plus a block between Terms and Consumable Rates: a section
+   Heading (starts a new PDF page), any number of tables each with their own
+   Heading, and a single optional Note. Terms seed from the regular
+   Quotation Terms & Conditions list. Email (reusing the Quotation email
+   template) and Duplicate, like AMC.
+===================================================================== */
+function renderComplexQuotations() {
+  const tbody = $('#complexQuotationsTbody');
+  let quotations = Store.getQuotations().filter(q => q.isComplex).map(q => Object.assign({}, q, { _companyName: companyName(q.companyId) }));
+  quotations = sortState.complexQuotations ? sortRows(quotations, 'complexQuotations') : quotations.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  if (!quotations.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">No complex quotations yet.</td></tr>`;
+    $('#complexQuotationsPagination').innerHTML = '';
+    updateSortIndicators('complexQuotations');
+    return;
+  }
+  const pageMeta = paginateRows(quotations, 'complexQuotations');
+  tbody.innerHTML = pageMeta.pageRows.map(q => `
+    <tr>
+      <td>${escapeHtml(q.quotationNo)}</td>
+      <td>${fmtDateShort(q.date)}</td>
+      <td>${escapeHtml(q._companyName)}</td>
+      <td><div class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-complexQuotation="${q.id}">Edit</button>
+        <button class="btn btn-secondary btn-sm" data-duplicate-complexQuotation="${q.id}">Duplicate</button>
+        <button class="btn btn-secondary btn-sm" data-pdf-complexQuotation="${q.id}">PDF</button>
+        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-complexQuotation="${q.id}">Email</button>` : ''}
+        ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-complexQuotation="${q.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
+      </div></td>
+    </tr>
+  `).join('');
+  $('#complexQuotationsPagination').innerHTML = renderPaginationBar('complexQuotations', pageMeta);
+  updateSortIndicators('complexQuotations');
+}
+
+function resetComplexQuotationModal() {
+  draft.complexQuotation = { items: [], consumables: [], terms: Store.getTermsTemplates().map(t => t.text), tables: [] };
+  $('#complexQuotationId').value = '';
+  $('#complexQuotationDate').value = todayISO();
+  populateCompanyDropdowns();
+  $('#complexQuotationCompany').value = '';
+  $('#complexQuotationHeading').value = '';
+  $('#complexQuotationSectionHeading').value = '';
+  $('#complexQuotationNote').value = '';
+  $('#complexQuotationConsumableHeading').value = 'Consumable Rates';
+  $('#complexQuotationShowSubtotal').checked = false;
+  $('#complexQuotationShowTax').checked = false;
+  $('#complexQuotationShowGrandTotal').checked = false;
+  $('#complexQuotationNewTableRows').value = 2;
+  $('#complexQuotationNewTableCols').value = 2;
+  $('#complexQuotationNewTableHeader').checked = false;
+  populateProductPicker($('#complexQuotationProductPicker'));
+  populateProductPicker($('#complexQuotationConsumableProductPicker'));
+  renderComplexLineItems();
+  renderComplexConsumables();
+  renderComplexQuotationTerms();
+  renderComplexTables();
+  showComplexQuotationStep('form');
+}
+
+function addComplexLineItemToDraft(productId) {
+  const product = Store.getProducts().find(p => p.id === productId);
+  if (!product) return;
+  const rate = product.rate;
+  draft.complexQuotation.items.push({
+    productId: product.id,
+    name: product.name,
+    rate,
+    amount: rate,
+    gstPercent: product.gstPercent,
+    details: product.details || '',
+  });
+  renderComplexLineItems();
+}
+
+function addComplexConsumableToDraft(productId) {
+  const product = Store.getProducts().find(p => p.id === productId);
+  if (!product) return;
+  draft.complexQuotation.consumables.push({
+    productId: product.id,
+    name: product.name,
+    qty: 1,
+    rate: product.rate,
+    details: product.details || '',
+  });
+  renderComplexConsumables();
+}
+
+function renderComplexLineItems() {
+  const tbody = $('#complexQuotationLineItemsBody');
+  const items = draft.complexQuotation.items;
+  if (!items.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">No line items added yet.</td></tr>`;
+  } else {
+    tbody.innerHTML = items.map((it, idx) => `
+      <tr>
+        <td>${escapeHtml(it.name)}</td>
+        <td class="num-col"><input type="number" min="0" step="0.01" value="${it.rate}" data-cx-line-field="rate" data-cx-line-idx="${idx}"></td>
+        <td><button type="button" class="remove-line" data-cx-remove-line="${idx}">&times;</button></td>
+      </tr>
+      <tr class="line-details-row">
+        <td colspan="3"><textarea placeholder="Additional details for this line (optional)" data-cx-line-field="details" data-cx-line-idx="${idx}">${escapeHtml(it.details || '')}</textarea></td>
+      </tr>`).join('');
+  }
+  renderComplexTotalsBox();
+}
+
+document.addEventListener('input', (e) => {
+  const field = e.target.getAttribute('data-cx-line-field');
+  if (!field) return;
+  const idx = Number(e.target.getAttribute('data-cx-line-idx'));
+  const it = draft.complexQuotation.items[idx];
+  if (field === 'details') {
+    it.details = e.target.value;
+    return;
+  }
+  if (field === 'rate') {
+    it.rate = Number(e.target.value) || 0;
+    it.amount = it.rate;
+    renderComplexTotalsBox();
+  }
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.hasAttribute('data-cx-remove-line')) return;
+  const idx = Number(e.target.getAttribute('data-cx-remove-line'));
+  draft.complexQuotation.items.splice(idx, 1);
+  renderComplexLineItems();
+});
+
+function renderComplexTotalsBox() {
+  const interState = currentInterState('complexQuotation');
+  const totals = computeTotals(draft.complexQuotation.items, interState);
+  draft.complexQuotation.totals = totals;
+  const box = $('#complexQuotationTotalsBox');
+  const rows = [];
+  rows.push(`<div class="row"><span>Subtotal</span><span>${fmt(totals.subtotal)}</span></div>`);
+  if (interState) {
+    rows.push(`<div class="row"><span>IGST</span><span>${fmt(totals.igst)}</span></div>`);
+  } else {
+    rows.push(`<div class="row"><span>CGST</span><span>${fmt(totals.cgst)}</span></div>`);
+    rows.push(`<div class="row"><span>SGST</span><span>${fmt(totals.sgst)}</span></div>`);
+  }
+  rows.push(`<div class="row grand"><span>Grand Total</span><span>${fmt(totals.total)}</span></div>`);
+  box.innerHTML = rows.join('');
+}
+
+$('#complexQuotationCompany').addEventListener('change', () => renderComplexTotalsBox());
+
+function renderComplexConsumables() {
+  const tbody = $('#complexQuotationConsumablesBody');
+  const items = draft.complexQuotation.consumables;
+  if (!items.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">No consumables added yet.</td></tr>`;
+  } else {
+    tbody.innerHTML = items.map((it, idx) => `
+      <tr>
+        <td>${escapeHtml(it.name)}</td>
+        <td class="num-col"><input type="number" min="0" step="any" value="${it.qty}" data-cx-consumable-field="qty" data-cx-consumable-idx="${idx}"></td>
+        <td class="num-col"><input type="number" min="0" step="0.01" value="${it.rate}" data-cx-consumable-field="rate" data-cx-consumable-idx="${idx}"></td>
+        <td><button type="button" class="remove-line" data-cx-remove-consumable="${idx}">&times;</button></td>
+      </tr>
+      <tr class="line-details-row">
+        <td colspan="4"><textarea placeholder="Additional details for this line (optional)" data-cx-consumable-field="details" data-cx-consumable-idx="${idx}">${escapeHtml(it.details || '')}</textarea></td>
+      </tr>`).join('');
+  }
+}
+
+document.addEventListener('input', (e) => {
+  const field = e.target.getAttribute('data-cx-consumable-field');
+  if (!field) return;
+  const idx = Number(e.target.getAttribute('data-cx-consumable-idx'));
+  const it = draft.complexQuotation.consumables[idx];
+  if (field === 'details') { it.details = e.target.value; return; }
+  it[field] = Number(e.target.value) || 0;
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.hasAttribute('data-cx-remove-consumable')) return;
+  const idx = Number(e.target.getAttribute('data-cx-remove-consumable'));
+  draft.complexQuotation.consumables.splice(idx, 1);
+  renderComplexConsumables();
+});
+
+function renderComplexQuotationTerms() {
+  const tbody = $('#complexQuotationTermsBody');
+  const terms = draft.complexQuotation.terms || [];
+  if (!terms.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">No terms added.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = terms.map((t, idx) => `
+    <tr>
+      <td>${idx + 1}</td>
+      <td><textarea data-cx-term-field data-cx-term-idx="${idx}">${escapeHtml(t)}</textarea></td>
+      <td><button type="button" class="remove-line" data-cx-remove-term="${idx}">&times;</button></td>
+    </tr>
+  `).join('');
+}
+
+document.addEventListener('input', (e) => {
+  if (!e.target.hasAttribute('data-cx-term-field')) return;
+  const idx = Number(e.target.getAttribute('data-cx-term-idx'));
+  draft.complexQuotation.terms[idx] = e.target.value;
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.hasAttribute('data-cx-remove-term')) return;
+  const idx = Number(e.target.getAttribute('data-cx-remove-term'));
+  draft.complexQuotation.terms.splice(idx, 1);
+  renderComplexQuotationTerms();
+});
+
+$('#complexQuotationAddTermBtn').addEventListener('click', () => {
+  draft.complexQuotation.terms = draft.complexQuotation.terms || [];
+  draft.complexQuotation.terms.push('');
+  renderComplexQuotationTerms();
+  const textareas = $$('#complexQuotationTermsBody textarea');
+  if (textareas.length) textareas[textareas.length - 1].focus();
+});
+
+/* Free-form tables, each with its own centered Heading. Same grid editor
+   look/limits as Service Report's tables (reusing makeEmptyFreeTable /
+   resizeFreeTableData and the .free-table-* CSS) but with its own data-cx-*
+   attributes, since Service Report's listeners are global and write to
+   draft.serviceReport. */
+function renderComplexTables() {
+  const container = $('#complexQuotationTablesContainer');
+  const tables = draft.complexQuotation.tables || [];
+  if (!tables.length) {
+    container.innerHTML = '<div style="color:var(--text-muted); padding:6px 0;">No tables added yet.</div>';
+    return;
+  }
+  container.innerHTML = tables.map((t, tIdx) => `
+    <div class="free-table-block">
+      <div class="free-table-toolbar">
+        <strong>Table ${tIdx + 1}</strong>
+        <label>Rows <input type="number" min="1" max="50" value="${t.rows}" data-cx-table-rows="${tIdx}"></label>
+        <label>Columns <input type="number" min="1" max="20" value="${t.cols}" data-cx-table-cols="${tIdx}"></label>
+        <button type="button" class="btn btn-secondary btn-sm" data-cx-resize-table="${tIdx}">Resize</button>
+        <label><input type="checkbox" data-cx-header-toggle="${tIdx}" ${t.hasHeader ? 'checked' : ''}> Header Row</label>
+        <button type="button" class="btn btn-danger btn-sm" data-cx-remove-table="${tIdx}">Remove Table</button>
+      </div>
+      <div class="form-field" style="margin-bottom:8px;">
+        <label>Table Heading (optional — bold, centered)</label>
+        <input type="text" value="${escapeHtml(t.heading || '')}" data-cx-table-heading="${tIdx}" placeholder="Prints bold and centered above this table">
+      </div>
+      <table class="free-table-grid"><tbody>
+        ${t.data.map((row, rIdx) => `<tr class="${t.hasHeader && rIdx === 0 ? 'header-row' : ''}">${row.map((cell, cIdx) => `<td><textarea data-cx-cell-table="${tIdx}" data-cx-cell-row="${rIdx}" data-cx-cell-col="${cIdx}">${escapeHtml(cell)}</textarea></td>`).join('')}</tr>`).join('')}
+      </tbody></table>
+    </div>`).join('');
+}
+
+document.addEventListener('input', (e) => {
+  if (e.target.hasAttribute('data-cx-cell-table')) {
+    const tIdx = Number(e.target.getAttribute('data-cx-cell-table'));
+    const rIdx = Number(e.target.getAttribute('data-cx-cell-row'));
+    const cIdx = Number(e.target.getAttribute('data-cx-cell-col'));
+    draft.complexQuotation.tables[tIdx].data[rIdx][cIdx] = e.target.value;
+  } else if (e.target.hasAttribute('data-cx-table-heading')) {
+    draft.complexQuotation.tables[Number(e.target.getAttribute('data-cx-table-heading'))].heading = e.target.value;
+  }
+});
+
+document.addEventListener('click', withErrorToast((e) => {
+  const resizeBtn = e.target.closest && e.target.closest('[data-cx-resize-table]');
+  if (resizeBtn) {
+    const tIdx = Number(resizeBtn.getAttribute('data-cx-resize-table'));
+    const table = draft.complexQuotation.tables[tIdx];
+    const rows = Math.max(1, Math.min(50, Number($(`[data-cx-table-rows="${tIdx}"]`).value) || table.rows));
+    const cols = Math.max(1, Math.min(20, Number($(`[data-cx-table-cols="${tIdx}"]`).value) || table.cols));
+    resizeFreeTableData(table, rows, cols);
+    renderComplexTables();
+    return;
+  }
+  const removeBtn = e.target.closest && e.target.closest('[data-cx-remove-table]');
+  if (removeBtn) {
+    if (!confirm('Remove this table?')) return;
+    draft.complexQuotation.tables.splice(Number(removeBtn.getAttribute('data-cx-remove-table')), 1);
+    renderComplexTables();
+  }
+}));
+
+document.addEventListener('change', (e) => {
+  if (!e.target.hasAttribute('data-cx-header-toggle')) return;
+  draft.complexQuotation.tables[Number(e.target.getAttribute('data-cx-header-toggle'))].hasHeader = e.target.checked;
+  renderComplexTables();
+});
+
+$('#complexQuotationAddTableBtn').addEventListener('click', () => {
+  const rows = Math.max(1, Math.min(50, Number($('#complexQuotationNewTableRows').value) || 2));
+  const cols = Math.max(1, Math.min(20, Number($('#complexQuotationNewTableCols').value) || 2));
+  const table = makeEmptyFreeTable(rows, cols, $('#complexQuotationNewTableHeader').checked);
+  table.heading = '';
+  draft.complexQuotation.tables.push(table);
+  renderComplexTables();
+});
+
+function getComplexQuotationDisplayOptions() {
+  return {
+    showSubtotal: $('#complexQuotationShowSubtotal').checked,
+    showTax: $('#complexQuotationShowTax').checked,
+    showGrandTotal: $('#complexQuotationShowGrandTotal').checked,
+  };
+}
+
+function getComplexQuotationNoForDraft() {
+  const existingId = $('#complexQuotationId').value;
+  if (existingId) {
+    return Store.getQuotations().find(q => q.id === existingId).quotationNo;
+  }
+  return getNextQuotationNo();
+}
+
+function showComplexQuotationStep(step) {
+  const isForm = step === 'form';
+  $('#complexQuotationStepForm').style.display = isForm ? '' : 'none';
+  $('#complexQuotationStepPreview').style.display = isForm ? 'none' : '';
+  $('#complexQuotationStepLabel1').classList.toggle('active', isForm);
+  $('#complexQuotationStepLabel2').classList.toggle('active', !isForm);
+  $('#complexQuotationNextBtn').style.display = isForm ? '' : 'none';
+  $('#complexQuotationEditBtn').style.display = isForm ? 'none' : '';
+  $('#complexQuotationDownloadBtn').style.display = isForm ? 'none' : '';
+  $('#complexQuotationConfirmBtn').style.display = isForm ? 'none' : '';
+}
+
+$('#btnAddComplexQuotation').addEventListener('click', () => {
+  if (!Store.getCompanies().some(c => c.isSalesCompany) || !Store.getProducts().length) {
+    toast('Add at least one product and company first');
+    return;
+  }
+  resetComplexQuotationModal();
+  openModal('complexQuotationModal');
+});
+
+$('#complexQuotationAddLineBtn').addEventListener('click', () => {
+  const productId = $('#complexQuotationProductPicker').value;
+  if (!productId) { toast('Select a product first'); return; }
+  addComplexLineItemToDraft(productId);
+});
+
+$('#complexQuotationConsumableAddLineBtn').addEventListener('click', () => {
+  const productId = $('#complexQuotationConsumableProductPicker').value;
+  if (!productId) { toast('Select a product first'); return; }
+  addComplexConsumableToDraft(productId);
+});
+
+function buildComplexQuotationDraftDoc(extra) {
+  const companyId = $('#complexQuotationCompany').value;
+  const company = companiesStoreForKind('complexQuotation').find(c => c.id === companyId);
+  const totals = draft.complexQuotation.totals || computeTotals(draft.complexQuotation.items, currentInterState('complexQuotation'));
+  const profile = Store.getProfile();
+  const billToSnapshot = company ? { name: company.name, address: company.address || '', gstin: company.gstin || '' } : null;
+  const profileSnapshot = {
+    name: profile.name || '', address: profile.address || '', gstin: profile.gstin || '',
+    bankName: profile.bankName || '', bankAccountNo: profile.bankAccountNo || '',
+    bankIFSC: profile.bankIFSC || '', bankBranch: profile.bankBranch || '',
+  };
+  const docData = Object.assign({
+    id: $('#complexQuotationId').value || undefined,
+    isComplex: true,
+    companyId,
+    date: $('#complexQuotationDate').value,
+    heading: $('#complexQuotationHeading').value,
+    items: draft.complexQuotation.items,
+    sectionHeading: $('#complexQuotationSectionHeading').value,
+    tables: JSON.parse(JSON.stringify(draft.complexQuotation.tables || [])),
+    note: $('#complexQuotationNote').value,
+    consumableHeading: $('#complexQuotationConsumableHeading').value,
+    consumables: draft.complexQuotation.consumables,
+    subtotal: totals.subtotal,
+    cgst: totals.cgst,
+    sgst: totals.sgst,
+    igst: totals.igst,
+    total: totals.total,
+    billToSnapshot,
+    profileSnapshot,
+  }, extra || {});
+  return [docData, company];
+}
+
+function getComplexQuotationDraftDoc() {
+  return buildComplexQuotationDraftDoc({
+    quotationNo: getComplexQuotationNoForDraft(),
+    displayOptions: getComplexQuotationDisplayOptions(),
+    terms: draft.complexQuotation.terms || [],
+  });
+}
+
+function renderComplexQuotationPreview(container, docData, company) {
+  const profile = Store.getProfile();
+  const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true }, docData.displayOptions || {});
+  const interState = isInterState(profile.gstin, company ? company.gstin : '');
+
+  const rowsHtml = docData.items.map((it, idx) => {
+    const detailsHtml = it.details ? `<div class="line-details">${escapeHtml(it.details)}</div>` : '';
+    return `<tr>
+      <td>${idx + 1}</td><td class="product-col">${escapeHtml(it.name)}${detailsHtml}</td>
+      <td>${fmt(it.rate)}</td>
+    </tr>`;
+  }).join('');
+
+  const taxRowsHtml = !opts.showTax ? '' : (interState
+    ? `<div class="row"><span>IGST</span><span>${fmt(docData.igst)}</span></div>`
+    : `<div class="row"><span>CGST</span><span>${fmt(docData.cgst)}</span></div><div class="row"><span>SGST</span><span>${fmt(docData.sgst)}</span></div>`);
+
+  const consumableRowsHtml = (docData.consumables || []).map((it, idx) => {
+    const detailsHtml = it.details ? `<div class="line-details">${escapeHtml(it.details)}</div>` : '';
+    return `<tr>
+      <td>${idx + 1}</td><td class="product-col">${escapeHtml(it.name)}${detailsHtml}</td>
+      <td>${it.qty}</td><td>${fmt(it.rate)}</td>
+    </tr>`;
+  }).join('');
+
+  const tablesHtml = (docData.tables || []).map(t => `
+    ${t.heading ? `<div class="doc-heading-center">${escapeHtml(t.heading)}</div>` : ''}
+    <table class="doc-free-table"><tbody>
+      ${t.data.map((row, rIdx) => `<tr class="${t.hasHeader && rIdx === 0 ? 'header-row' : ''}">${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}
+    </tbody></table>`).join('');
+
+  container.innerHTML = `
+    <div class="doc-head">
+      <div class="doc-head-left">
+        ${profile.logoDataUrl ? `<img class="doc-logo" src="${profile.logoDataUrl}">` : ''}
+        <div>
+          <div class="biz-title" style="color: ${sanitizeHexColor(profile.nameColor)};">${escapeHtml(profile.name || 'Your Business Name')}</div>
+          <div>${formatAddressHtml(profile.address || '')}</div>
+          ${profile.gstin ? `<div>GSTIN: ${escapeHtml(profile.gstin)}</div>` : ''}
+        </div>
+      </div>
+      <div class="doc-head-right">
+        <div class="doc-title">QUOTATION</div>
+        <div>Quote No: ${escapeHtml(docData.quotationNo || '(will be assigned)')}</div>
+        <div>Quote Date: ${fmtDateShort(docData.date)}</div>
+      </div>
+    </div>
+    <div class="bill-to">
+      <h4>To</h4>
+      <div>${escapeHtml(company ? company.name : '')}</div>
+      <div>${escapeHtml(company ? company.address || '' : '')}</div>
+      ${company && company.gstin ? `<div>GSTIN: ${escapeHtml(company.gstin)}</div>` : ''}
+    </div>
+    ${docData.heading ? `<div class="doc-heading-center">${escapeHtml(docData.heading)}</div>` : ''}
+    <table>
+      <thead><tr><th>#</th><th class="product-col">Product</th><th>Rate</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <div class="totals-box">
+      ${opts.showSubtotal ? `<div class="row"><span>Subtotal</span><span>${fmt(docData.subtotal)}</span></div>` : ''}
+      ${taxRowsHtml}
+      ${opts.showGrandTotal ? `<div class="row grand"><span>Grand Total</span><span>${fmt(docData.total)}</span></div>` : ''}
+    </div>
+    ${docData.terms && docData.terms.length ? `
+      <div class="doc-terms">
+        <div class="doc-terms-title">Terms &amp; Conditions</div>
+        <ol>${docData.terms.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ol>
+      </div>` : ''}
+    ${docData.sectionHeading ? `<div class="doc-heading-center" style="margin-top:20px;">${escapeHtml(docData.sectionHeading)}</div>` : ''}
+    ${tablesHtml}
+    ${docData.note && docData.note.trim() ? `<div class="doc-paragraph">${escapeHtml(docData.note)}</div>` : ''}
+    <div class="doc-heading-center">${escapeHtml(docData.consumableHeading || 'Consumable Rates')}</div>
+    <table>
+      <thead><tr><th>#</th><th class="product-col">Product</th><th>Qty</th><th>Rate</th></tr></thead>
+      <tbody>${consumableRowsHtml}</tbody>
+    </table>
+    <div class="doc-address-footer">${formatAddressHtml((profile.footerText && profile.footerText.trim()) ? profile.footerText.trim() : [profile.name, profile.address].filter(Boolean).join(' | '))}</div>
+  `;
+}
+
+$('#complexQuotationNextBtn').addEventListener('click', () => {
+  if (!ensureEditingRecordExists('complexQuotation', $('#complexQuotationId').value, Store.getQuotations())) return;
+  if (!$('#complexQuotationCompany').value) { toast('Select a company'); return; }
+  if (!$('#complexQuotationDate').value) { toast('Date is required'); return; }
+  if (!draft.complexQuotation.items.length) { toast('Add at least one line item'); return; }
+  const [docData, company] = getComplexQuotationDraftDoc();
+  renderComplexQuotationPreview($('#complexQuotationPreviewContent'), docData, company);
+  showComplexQuotationStep('preview');
+});
+
+$('#complexQuotationEditBtn').addEventListener('click', () => showComplexQuotationStep('form'));
+
+$('#complexQuotationDownloadBtn').addEventListener('click', () => {
+  const [docData, company] = getComplexQuotationDraftDoc();
+  const doc = buildComplexQuotationPdf(docData, company, Store.getProfile());
+  doc.save(`${docData.quotationNo.replace(/\//g, '-')}.pdf`);
+});
+
+$('#complexQuotationConfirmBtn').addEventListener('click', withErrorToast(async () => {
+  if (blockIfViewer()) return;
+  const isNew = !$('#complexQuotationId').value;
+  if (!ensureEditingRecordExists('complexQuotation', $('#complexQuotationId').value, Store.getQuotations())) return;
+  const [docData] = getComplexQuotationDraftDoc();
+  if (isNew) {
+    docData.quotationNo = await guardAgainstNumberCollision(
+      [STORAGE_KEYS.quotations], docData.quotationNo,
+      () => Store.getQuotations().map(q => q.quotationNo),
+      getNextQuotationNo, 'Quotation No'
+    );
+  }
+  Store.saveQuotation(docData);
+  closeModal('complexQuotationModal');
+  renderComplexQuotations();
+  if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId);
+  toast('Complex Quotation saved');
+}));
+
+/* Edit and Duplicate share this loader — Duplicate leaves the id blank so the
+   existing Confirm flow saves a brand-new record with the next QTN- number
+   (see loadAmcQuotationIntoModal). */
+function loadComplexQuotationIntoModal(q, asDuplicate) {
+  {
+    draft.complexQuotation = {
+      items: JSON.parse(JSON.stringify(q.items || [])),
+      consumables: JSON.parse(JSON.stringify(q.consumables || [])),
+      terms: JSON.parse(JSON.stringify(q.terms || [])),
+      tables: JSON.parse(JSON.stringify(q.tables || [])),
+    };
+    $('#complexQuotationId').value = asDuplicate ? '' : q.id;
+    $('#complexQuotationDate').value = q.date;
+    $('#complexQuotationHeading').value = q.heading || '';
+    $('#complexQuotationSectionHeading').value = q.sectionHeading || '';
+    $('#complexQuotationNote').value = q.note || '';
+    $('#complexQuotationConsumableHeading').value = q.consumableHeading || 'Consumable Rates';
+    populateProductPicker($('#complexQuotationProductPicker'));
+    populateProductPicker($('#complexQuotationConsumableProductPicker'));
+    populateCompanyDropdowns({ complexQuotation: q.companyId });
+    $('#complexQuotationCompany').value = q.companyId;
+    const opts = Object.assign({ showSubtotal: true, showTax: true, showGrandTotal: true }, q.displayOptions || {});
+    $('#complexQuotationShowSubtotal').checked = opts.showSubtotal;
+    $('#complexQuotationShowTax').checked = opts.showTax;
+    $('#complexQuotationShowGrandTotal').checked = opts.showGrandTotal;
+    renderComplexLineItems();
+    renderComplexConsumables();
+    renderComplexQuotationTerms();
+    renderComplexTables();
+    showComplexQuotationStep('form');
+    openModal('complexQuotationModal');
+  }
+}
+
+document.addEventListener('click', withErrorToast((e) => {
+  const editId = e.target.getAttribute && e.target.getAttribute('data-edit-complexQuotation');
+  if (editId) loadComplexQuotationIntoModal(Store.getQuotations().find(x => x.id === editId), false);
+  const duplicateId = e.target.getAttribute && e.target.getAttribute('data-duplicate-complexQuotation');
+  if (duplicateId) loadComplexQuotationIntoModal(Store.getQuotations().find(x => x.id === duplicateId), true);
+  const pdfId = e.target.getAttribute && e.target.getAttribute('data-pdf-complexQuotation');
+  if (pdfId) {
+    const q = Store.getQuotations().find(x => x.id === pdfId);
+    const doc = buildComplexQuotationPdf(q, resolveBillToCompany(q), resolveDocProfile(q));
+    doc.save(`${q.quotationNo.replace(/\//g, '-')}.pdf`);
+  }
+  const emailId = e.target.getAttribute && e.target.getAttribute('data-email-complexQuotation');
+  if (emailId) {
+    const q = Store.getQuotations().find(x => x.id === emailId);
+    const doc = buildComplexQuotationPdf(q, resolveBillToCompany(q), resolveDocProfile(q));
+    return sendDocumentEmail('quotation', `${q.quotationNo.replace(/\//g, '-')}.pdf`, doc);
+  }
+  const delBtn = e.target.closest && e.target.closest('[data-delete-complexQuotation]');
+  const delId = delBtn ? delBtn.getAttribute('data-delete-complexQuotation') : null;
+  if (delId) {
+    if (blockIfViewer()) return;
+    if (blockDeleteIfNotAdmin()) return;
+    if (confirm('Delete this complex quotation?')) { Store.deleteQuotation(delId); renderComplexQuotations(); if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId); toast('Complex Quotation deleted'); }
   }
 }));
 
@@ -2818,13 +3443,7 @@ function renderInvoices() {
       <td>${fmt(inv._gst)}</td>
       <td>${fmt(inv.total)}</td>
       <td>${paymentStatusBadge(inv)}</td>
-      <td><div class="actions-cell">
-        <button class="btn btn-secondary btn-sm" data-edit-invoice="${inv.id}">Edit</button>
-        <button class="btn btn-secondary btn-sm" data-duplicate-invoice="${inv.id}">Duplicate</button>
-        <button class="btn btn-secondary btn-sm" data-pdf-invoice="${inv.id}">PDF</button>
-        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-invoice="${inv.id}">Email</button>` : ''}
-        ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-invoice="${inv.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
-      </div></td>
+      <td>${invoiceActionsCellHtml(inv)}</td>
     </tr>
   `).join('');
   $('#invoicesPagination').innerHTML = renderPaginationBar('invoices', pageMeta);
@@ -3021,6 +3640,7 @@ $('#invoiceConfirmBtn').addEventListener('click', withErrorToast(async () => {
   renderPayments();
   renderSalesByCompany();
   renderMissingPurchaseEntries();
+  renderMissingInvoiceEntries();
   if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId);
   toast('Invoice saved');
 }));
@@ -3098,12 +3718,40 @@ document.addEventListener('click', withErrorToast((e) => {
     const doc = buildInvoicePdf(inv, resolveBillToCompany(inv), resolveDocProfile(inv));
     return sendDocumentEmail('invoice', `${inv.invoiceNo.replace(/\//g, '-')}.pdf`, doc);
   }
+  const addPurchaseId = e.target.getAttribute && e.target.getAttribute('data-add-purchase-invoice');
+  if (addPurchaseId) {
+    if (blockIfViewer()) return;
+    const inv = Store.getInvoices().find(x => x.id === addPurchaseId);
+    if (!inv) return;
+    if (!Store.getCompanies().some(c => c.isPurchaseCompany)) {
+      toast('Add at least one purchase company first');
+      return;
+    }
+    resetPurchaseModal();
+    $('#purchaseDate').value = inv.date;
+    // Invoice rates are selling prices; a purchase's rate is cost rate, so take the product master's rate (0 if the product was deleted).
+    draft.purchase.items = inv.items.map(it => {
+      const product = Store.getProducts().find(p => p.id === it.productId);
+      return {
+        productId: it.productId,
+        name: it.name,
+        hsnCode: it.hsnCode,
+        unit: it.unit,
+        qty: it.qty,
+        rate: product ? product.rate : 0,
+        gstPercent: it.gstPercent,
+        details: it.details || '',
+      };
+    });
+    renderLineItems('purchase');
+    openModal('purchaseModal');
+  }
   const delBtn = e.target.closest && e.target.closest('[data-delete-invoice]');
   const delId = delBtn ? delBtn.getAttribute('data-delete-invoice') : null;
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
-    if (confirm('Delete this invoice?')) { Store.deleteInvoice(delId); renderInvoices(); renderPayments(); renderSalesByCompany(); renderMissingPurchaseEntries(); if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId); toast('Invoice deleted'); }
+    if (confirm('Delete this invoice?')) { Store.deleteInvoice(delId); renderInvoices(); renderPayments(); renderSalesByCompany(); renderMissingPurchaseEntries(); renderMissingInvoiceEntries(); if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId); toast('Invoice deleted'); }
   }
 }));
 
@@ -3731,6 +4379,72 @@ function renderMissingPurchaseEntries() {
     </div>`;
 }
 
+/** Mirror of computeMissingPurchaseEntries: products whose purchased qty exceeds
+ * invoiced qty, excluding opted-out products (Product.excludeFromInvoiceCheck).
+ * Purchased-but-unsold can also just be stock on hand, so this is a nudge, not
+ * an error — the product flag is the escape hatch. */
+function computeMissingInvoiceEntries() {
+  const sold = computeProductSoldDetail();
+  const purchased = computeProductPurchasedDetail();
+  const products = Store.getProducts();
+  const result = [];
+  purchased.forEach((purchasedEntry, productId) => {
+    const product = products.find(p => p.id === productId);
+    if (product && product.excludeFromInvoiceCheck) return;
+    const soldEntry = sold.get(productId) || { qty: 0, rows: [] };
+    const unsold = purchasedEntry.qty - soldEntry.qty;
+    if (unsold <= 0.009) return;
+    const firstRowName = (Store.getPurchases().flatMap(p => p.items || []).find(i => i.productId === productId) || {}).name;
+    result.push({
+      productName: product ? product.name : (firstRowName || ''),
+      purchasedQty: purchasedEntry.qty,
+      soldQty: soldEntry.qty,
+      unsold: Math.round(unsold * 100) / 100,
+      purchasedRows: purchasedEntry.rows,
+      soldRows: soldEntry.rows,
+    });
+  });
+  return result.sort((a, b) => b.unsold - a.unsold);
+}
+
+function renderMissingInvoiceEntries() {
+  const container = $('#missingInvoiceEntries');
+  const rows = computeMissingInvoiceEntries();
+  if (!rows.length) {
+    container.innerHTML = `<div class="card" style="padding:20px; text-align:center; color:var(--text-muted);">No products currently show purchases without an invoice.</div>`;
+    return;
+  }
+  container.innerHTML = `
+    <div class="card">
+      <table>
+        <thead><tr><th>Product</th><th>Qty Purchased</th><th>Qty Invoiced</th><th>Not Invoiced</th><th>Details</th></tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td>${escapeHtml(r.productName)}</td>
+              <td>${r.purchasedQty}</td>
+              <td>${r.soldQty}</td>
+              <td><span class="badge badge-warning">${r.unsold}</span></td>
+              <td><details>
+                <summary>View Purchases / Invoices</summary>
+                <strong>Purchased via</strong>
+                <table class="diff-table">
+                  <thead><tr><th>Purchase No</th><th>Date</th><th>Qty</th></tr></thead>
+                  <tbody>${r.purchasedRows.map(x => `<tr><td>${escapeHtml(x.purchaseNo || '')}</td><td>${fmtDateShort(x.date)}</td><td>${x.qty}</td></tr>`).join('')}</tbody>
+                </table>
+                <strong>Invoiced in</strong>
+                ${r.soldRows.length ? `
+                <table class="diff-table">
+                  <thead><tr><th>Invoice No</th><th>Date</th><th>Qty</th></tr></thead>
+                  <tbody>${r.soldRows.map(x => `<tr><td>${escapeHtml(x.invoiceNo || '')}</td><td>${fmtDateShort(x.date)}</td><td>${x.qty}</td></tr>`).join('')}</tbody>
+                </table>` : `<div style="color:var(--text-muted);">No invoice entries at all for this product.</div>`}
+              </details></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
 /* Shared by the Reports tab's Purchases-by-Company accordion and the Company
    360 page (modern theme) — see buildCompanyInvoiceRows() above for why. */
 function buildCompanyPurchaseRows(companyId) {
@@ -3832,15 +4546,68 @@ function companyDetailInvoiceRow(inv) {
       <td>${fmt((Number(inv.cgst) || 0) + (Number(inv.sgst) || 0) + (Number(inv.igst) || 0))}</td>
       <td>${fmt(inv.total)}</td>
       <td>${paymentStatusBadge(inv)}</td>
-      <td><div class="actions-cell">
-        <button class="btn btn-secondary btn-sm" data-edit-invoice="${inv.id}">Edit</button>
-        <button class="btn btn-secondary btn-sm" data-duplicate-invoice="${inv.id}">Duplicate</button>
-        <button class="btn btn-secondary btn-sm" data-pdf-invoice="${inv.id}">PDF</button>
-        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-invoice="${inv.id}">Email</button>` : ''}
-        ${canDelete() ? `<button class="btn btn-danger btn-sm" data-delete-invoice="${inv.id}" title="Delete" aria-label="Delete"><svg class="icon-trash" aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : ''}
-      </div></td>
+      <td>${invoiceActionsCellHtml(inv)}</td>
     </tr>`;
 }
+
+/* Shared Actions cell for the Invoices tab and Company 360's Sales History:
+   Edit/Email stay visible, the rest live in the shared #rowMoreMenu popover
+   (see invoiceMoreMenuHtml). */
+function invoiceActionsCellHtml(inv) {
+  return `<div class="actions-cell">
+        <button class="btn btn-secondary btn-sm" data-edit-invoice="${inv.id}">Edit</button>
+        ${Store.getEmailTemplates().enabled ? `<button class="btn btn-secondary btn-sm" data-email-invoice="${inv.id}">Email</button>` : ''}
+        <button class="btn btn-secondary btn-sm btn-more" data-more-invoice="${inv.id}" aria-haspopup="menu" aria-label="More actions" title="More actions">&#8942;</button>
+      </div>`;
+}
+
+/* Items reuse the exact data-* attributes the existing delegated invoice
+   handlers already read, so the menu needs no handler wiring of its own
+   except the new Add to Purchase one. */
+function invoiceMoreMenuHtml(id) {
+  return `
+    <button type="button" data-duplicate-invoice="${id}">Duplicate</button>
+    <button type="button" data-pdf-invoice="${id}">PDF</button>
+    <button type="button" data-add-purchase-invoice="${id}">Add to Purchase</button>
+    ${canDelete() ? `<button type="button" class="danger" data-delete-invoice="${id}">Delete</button>` : ''}`;
+}
+
+function closeRowMoreMenu() {
+  const m = $('#rowMoreMenu');
+  if (m) m.classList.remove('open');
+}
+
+function openRowMoreMenu(btn, html) {
+  const m = $('#rowMoreMenu');
+  m.innerHTML = html;
+  m.classList.add('open');
+  m.style.maxHeight = '';
+  const margin = 8;
+  const r = btn.getBoundingClientRect();
+  const vh = window.innerHeight, vw = window.innerWidth;
+  const h = m.offsetHeight, w = m.offsetWidth;
+  let top = r.bottom + 4;
+  if (top + h > vh - margin) top = r.top - 4 - h;
+  top = Math.max(margin, Math.min(top, vh - margin - h));
+  let left = Math.max(margin, Math.min(r.right - w, vw - margin - w));
+  m.style.top = top + 'px';
+  m.style.left = left + 'px';
+}
+
+document.addEventListener('click', (e) => {
+  const moreBtn = e.target.closest && e.target.closest('[data-more-invoice]');
+  if (moreBtn) {
+    const menu = $('#rowMoreMenu');
+    if (menu.classList.contains('open') && menu._anchor === moreBtn) { closeRowMoreMenu(); return; }
+    menu._anchor = moreBtn;
+    openRowMoreMenu(moreBtn, invoiceMoreMenuHtml(moreBtn.getAttribute('data-more-invoice')));
+    return;
+  }
+  closeRowMoreMenu();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeRowMoreMenu(); });
+window.addEventListener('scroll', closeRowMoreMenu, true);
+window.addEventListener('resize', closeRowMoreMenu);
 
 /* Shared by the Reports tab's Sales-by-Company accordion and the Company 360
    page (modern theme) — a single source for "this company's own invoices,
@@ -3965,6 +4732,7 @@ $('#savePurchaseBtn').addEventListener('click', withErrorToast(async () => {
   renderPurchases();
   renderPurchasesByCompany();
   renderMissingPurchaseEntries();
+  renderMissingInvoiceEntries();
   if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId);
   toast('Purchase saved');
 }));
@@ -3992,7 +4760,7 @@ document.addEventListener('click', withErrorToast((e) => {
   if (delId) {
     if (blockIfViewer()) return;
     if (blockDeleteIfNotAdmin()) return;
-    if (confirm('Delete this purchase?')) { Store.deletePurchase(delId); renderPurchases(); renderPurchasesByCompany(); renderMissingPurchaseEntries(); if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId); toast('Purchase deleted'); }
+    if (confirm('Delete this purchase?')) { Store.deletePurchase(delId); renderPurchases(); renderPurchasesByCompany(); renderMissingPurchaseEntries(); renderMissingInvoiceEntries(); if (openCompanyDetailId) renderCompanyDetail(openCompanyDetailId); toast('Purchase deleted'); }
   }
 }));
 
@@ -4598,7 +5366,20 @@ $('#summaryMonthlyBtn').addEventListener('click', () => {
   renderSummarySales();
 });
 
+function renderSummaryPendingStats() {
+  const rows = computeCompanyOutstanding();
+  const totalOwed = rows.reduce((s, r) => s + r.owed, 0);
+  const unpaidInvoices = rows.reduce((s, r) => s + r.unpaidCount, 0);
+  const companiesOwing = rows.filter(r => r.owed > 0.009).length;
+  $('#summaryPendingStats').innerHTML = `
+    <div class="stat-card ${totalOwed > 0.009 ? 'negative' : ''}"><div class="label">Total Pending Payments</div><div class="value">${fmt(totalOwed)}</div></div>
+    <div class="stat-card"><div class="label">Unpaid Invoices</div><div class="value">${unpaidInvoices}</div></div>
+    <div class="stat-card"><div class="label">Companies Owing</div><div class="value">${companiesOwing}</div></div>
+  `;
+}
+
 function renderSummary() {
+  renderSummaryPendingStats();
   renderSummaryOutstanding();
 }
 
@@ -5533,6 +6314,7 @@ Object.assign(SORT_RENDER_FNS, {
   companies: renderCompanies,
   quotations: renderQuotations,
   amcQuotations: renderAmcQuotations,
+  complexQuotations: renderComplexQuotations,
   invoices: renderInvoices,
   serviceReports: renderServiceReports,
   purchases: renderPurchases,
